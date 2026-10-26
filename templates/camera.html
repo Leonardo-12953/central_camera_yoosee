@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <title>FEED // {{ friendly_folder }}</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap" rel="stylesheet">
+    <style>
+        body {
+            background-color: #030a0f;
+            color: #00ffcc;
+            font-family: 'Share Tech Mono', monospace;
+            overflow-x: hidden;
+        }
+        body::before {
+            content: " ";
+            display: block;
+            position: fixed;
+            top: 0; left: 0; bottom: 0; right: 0;
+            background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.25) 50%), linear-gradient(90deg, rgba(255, 0, 0, 0.06), rgba(0, 255, 0, 0.02), rgba(0, 0, 255, 0.06));
+            z-index: 99999;
+            background-size: 100% 2px, 3px 100%;
+            pointer-events: none;
+        }
+        h2, h6 {
+            text-shadow: 0 0 8px rgba(0, 255, 204, 0.5);
+            letter-spacing: 1px;
+        }
+        .card-cyber {
+            background-color: #071521 !important;
+            border: 1px solid #00ffcc44;
+            box-shadow: 0 0 10px rgba(0, 255, 204, 0.08);
+        }
+        .btn-cyber-outline {
+            background-color: transparent;
+            border: 1px solid #00ffcc;
+            color: #00ffcc;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            transition: 0.2s;
+        }
+        .btn-cyber-outline:hover {
+            background-color: #00ffcc;
+            color: #030a0f;
+            box-shadow: 0 0 12px #00ffcc;
+        }
+        .search-cyber {
+            background-color: #071521 !important;
+            border: 1px solid #00ffcc88 !important;
+            color: #00ffcc !important;
+        }
+        .search-cyber:focus {
+            box-shadow: 0 0 12px #00ffcc;
+            border-color: #00ffcc !important;
+        }
+        video {
+            border: 1px solid #00ffcc33;
+        }
+    </style>
+</head>
+<body class="bg-dark text-light">
+    <div class="container mt-4 mb-5">
+        <a href="{{ url_for('index') }}" class="btn btn-cyber-outline mb-4">← [VOLTAR AO PAINEL PRINCIPAL]</a>
+        <h2>NODE ACTIVE: {{ friendly_folder }}</h2>
+        <p class="text-muted">ORIGIN_PATH: <code>{{ folder_name }}</code></p>
+
+        <!-- Barra de Pesquisa por data/hora estilo terminal -->
+        <div class="mb-4">
+            <input type="text" id="searchInput" class="form-control search-cyber form-control-lg" placeholder="> FILTRAR POR TIMESTAMP OU ARQUIVO (ex: 13/10/2026 ou 22:08)...">
+        </div>
+
+        <div class="row" id="videoGrid">
+            {% for vid in videos %}
+            <div class="col-md-4 mb-4 video-item" data-search="{{ vid.datetime }} {{ vid.filename }}">
+                <div class="card card-cyber text-light shadow">
+                    <div class="card-body">
+                        <h6 class="card-title text-warning mb-2">⏱ {{ vid.datetime }}</h6>
+                        <!-- Player com metadata ativo e visual hacker -->
+                        <video width="100%" controls preload="metadata" class="rounded mb-2 bg-black">
+                            <source src="{{ url_for('stream_video', folder_name=folder_name, filename=vid.filename) }}" type="video/mp4">
+                            Seu navegador não suporta reprodução de vídeo.
+                        </video>
+                        <p class="small text-white-50 mb-0 text-truncate">> FILE: {{ vid.filename }}</p>
+                    </div>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+
+        <!-- Controles de Paginação Cyber -->
+        {% if total_pages > 1 %}
+        <nav class="mt-4">
+            <ul class="pagination justify-content-center">
+                <li class="page-item {% if page <= 1 %}disabled{% endif %}">
+                    <a class="page-link bg-dark text-info border-info" href="{{ url_for('view_camera', folder_name=folder_name, page=page-1) }}">« ANTERIOR</a>
+                </li>
+                
+                <li class="page-item disabled">
+                    <span class="page-link bg-secondary text-light border-secondary">PÁGINA {{ page }} / {{ total_pages }}</span>
+                </li>
+
+                <li class="page-item {% if page >= total_pages %}disabled{% endif %}">
+                    <a class="page-link bg-dark text-info border-info" href="{{ url_for('view_camera', folder_name=folder_name, page=page+1) }}">PRÓXIMA »</a>
+                </li>
+            </ul>
+        </nav>
+        {% endif %}
+    </div>
+
+    <script>
+        // Script de filtro de busca em tempo real
+        document.getElementById('searchInput').addEventListener('input', function(e) {
+            let term = e.target.value.toLowerCase();
+            let items = document.querySelectorAll('.video-item');
+            
+            items.forEach(item => {
+                let searchData = item.getAttribute('data-search').toLowerCase();
+                if(searchData.includes(term)) {
+                    item.style.display = 'block';
+                } else {
+                    item.style.display = 'none';
+                }
+            });
+        });
+    </script>
+</body>
+</html>
