@@ -1,0 +1,12 @@
+{
+    "system": {
+        "record_root": "/mnt/megadisk/dowloads_geral/record",
+        "retention_days": 5
+    },
+    "cameras": {
+        "8280145591": "Portão Lu..",
+        "7971389991": "Portão Y & L",
+        "8569088134": "Garagem",
+        "4507574552": "Fundos do Quintal"
+    }
+}

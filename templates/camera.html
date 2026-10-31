@@ -66,7 +66,15 @@
 
         <!-- Barra de Pesquisa por data/hora estilo terminal -->
         <div class="mb-4">
-            <input type="text" id="searchInput" class="form-control search-cyber form-control-lg" placeholder="> FILTRAR POR TIMESTAMP OU ARQUIVO (ex: 13/10/2026 ou 22:08)...">
+            <form method="GET" class="mb-4">
+                <input
+                    type="text"
+                    name="search"
+                    class="form-control search-cyber form-control-lg"
+                    placeholder="> FILTRAR POR TIMESTAMP OU ARQUIVO"
+                    value="{{ search }}"
+                >
+            </form>
         </div>
 
         <div class="row" id="videoGrid">
@@ -92,7 +100,10 @@
         <nav class="mt-4">
             <ul class="pagination justify-content-center">
                 <li class="page-item {% if page <= 1 %}disabled{% endif %}">
-                    <a class="page-link bg-dark text-info border-info" href="{{ url_for('view_camera', folder_name=folder_name, page=page-1) }}">« ANTERIOR</a>
+                    <a class="page-link bg-dark text-info border-info" href="{{ url_for('view_camera',
+                    folder_name=folder_name,
+                    page=page+1,
+                    search=search) }}">« ANTERIOR</a>
                 </li>
                 
                 <li class="page-item disabled">
@@ -107,21 +118,5 @@
         {% endif %}
     </div>
 
-    <script>
-        // Script de filtro de busca em tempo real
-        document.getElementById('searchInput').addEventListener('input', function(e) {
-            let term = e.target.value.toLowerCase();
-            let items = document.querySelectorAll('.video-item');
-            
-            items.forEach(item => {
-                let searchData = item.getAttribute('data-search').toLowerCase();
-                if(searchData.includes(term)) {
-                    item.style.display = 'block';
-                } else {
-                    item.style.display = 'none';
-                }
-            });
-        });
-    </script>
 </body>
 </html>
