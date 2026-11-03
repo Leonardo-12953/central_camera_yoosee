@@ -1,5 +1,5 @@
 
-from flask import Flask, render_template, request, send_from_directory, redirect, url_for, Response
+from flask import Flask, render_template, flash, request, send_from_directory, redirect, url_for, Response
 import os
 import json
 import math
@@ -7,6 +7,7 @@ import re
 from datetime import datetime, timedelta
 
 app = Flask(__name__)
+app.secret_key = "leosecops_super_secret_key"
 
 CONFIG_FILE = "config.json"
 
@@ -328,23 +329,22 @@ def config_page():
 
     if request.method == 'POST':
 
-        config["system"]["record_root"] = (
-            request.form.get("record_root", "").strip()
+        config["system"]["record_root"] = request.form.get(
+            "record_root"
         )
 
         config["system"]["retention_days"] = int(
-            request.form.get("retention_days", 5)
+            request.form.get("retention_days")
         )
 
         save_config(config)
 
-        return redirect(url_for("config_page"))
+        return redirect(url_for('index'))
 
     return render_template(
-        "config.html",
+        'config.html',
         config=config["system"]
     )
-
 
 @app.route('/rename_folder', methods=['POST'])
 def rename_folder():

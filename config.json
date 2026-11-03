@@ -1,11 +1,11 @@
 {
     "system": {
-        "record_root": "/mnt/megadisk/dowloads_geral/record",
-        "retention_days": 5
+        "record_root": "/mnt/gigastorage/dowloads_geral/record",
+        "retention_days": 7
     },
     "cameras": {
-        "8280145591": "Portão Lu..",
-        "7971389991": "Portão Y & L",
+        "8280145591": "Portão D-02",
+        "7971389991": "Portão E-01",
         "8569088134": "Garagem",
         "4507574552": "Fundos do Quintal"
     }

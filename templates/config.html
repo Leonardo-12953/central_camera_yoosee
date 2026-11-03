@@ -1,8 +1,8 @@
 <!DOCTYPE html>
-<html lang="pt-br">
+<html lang="pt-BR">
+
 <head>
     <meta charset="UTF-8">
-
     <title>Configurações</title>
 
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
@@ -12,47 +12,126 @@
 
 <div class="container mt-5">
 
-    <h1>⚙ Configurações do Sistema</h1>
+    <div class="row justify-content-center">
 
-    <form method="POST">
+        <div class="col-md-8">
 
-        <div class="mb-3">
+            <div class="card bg-black border-info text-light">
 
-            <label class="form-label">
-                Caminho das Gravações
-            </label>
+                <div class="card-body">
 
-            <input
-                type="text"
-                class="form-control"
-                name="record_root"
-                value="{{ config.record_root }}"
-                required>
+                    <h2 class="mb-4">
+                        ⚙ Configurações do Sistema
+                    </h2>
+
+                    <form method="POST" id="configForm">
+
+                        <div class="mb-4">
+
+                            <label class="form-label">
+                                Caminho das Gravações
+                            </label>
+
+                            <input
+                                type="text"
+                                class="form-control"
+                                name="record_root"
+                                value="{{ config.record_root }}"
+                                required>
+
+                        </div>
+
+                        <div class="mb-3">
+
+                            <label class="form-label">
+                                Dias de Retenção
+                            </label>
+
+                            <input
+                                type="number"
+                                class="form-control"
+                                name="retention_days"
+                                id="retention_days"
+                                value="{{ config.retention_days }}"
+                                min="1">
+
+                        </div>
+
+                        <div class="alert alert-warning">
+
+                            <strong>Atenção:</strong>
+
+                            Alterar a retenção não apaga vídeos imediatamente.
+
+                            A nova política será aplicada pela rotina automática
+                            do sistema durante as próximas execuções.
+
+                        </div>
+
+                        <div class="d-flex justify-content-between mt-4">
+
+                            <a href="{{ url_for('index') }}"
+                               class="btn btn-secondary">
+                                ← Voltar
+                            </a>
+
+                            <button type="submit"
+                                    class="btn btn-success">
+                                Salvar Configurações
+                            </button>
+
+                        </div>
+
+                    </form>
+
+                </div>
+
+            </div>
 
         </div>
 
-        <div class="mb-3">
-
-            <label class="form-label">
-                Dias de Retenção
-            </label>
-
-            <input
-                type="number"
-                class="form-control"
-                name="retention_days"
-                value="{{ config.retention_days }}"
-                min="1">
-
-        </div>
-
-        <button type="submit" class="btn btn-success">
-            Salvar
-        </button>
-
-    </form>
+    </div>
 
 </div>
+
+<script>
+
+const retentionAtual = parseInt(
+    "{{ config.retention_days }}"
+);
+
+document.getElementById("configForm")
+.addEventListener("submit", function(event) {
+
+    const novoValor = parseInt(
+        document.getElementById("retention_days").value
+    );
+
+    if (novoValor < retentionAtual) {
+
+        const confirmar = confirm(
+
+            "⚠ ATENÇÃO\n\n" +
+
+            "Você reduziu a retenção de vídeos.\n\n" +
+
+            "Vídeos mais antigos poderão ser removidos pela rotina automática do sistema.\n\n" +
+
+            "Deseja continuar?"
+
+        );
+
+        if (!confirmar) {
+
+            event.preventDefault();
+
+        }
+
+    }
+
+});
+
+</script>
 
 </body>
 </html>
