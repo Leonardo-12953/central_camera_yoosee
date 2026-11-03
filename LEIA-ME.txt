@@ -1,0 +1,85 @@
+CENTRAL DE CAMERAS - GUIA RAPIDO
+================================
+
+Este pacote ja vem pronto. Voce NAO precisa instalar Python, Git ou
+qualquer outro programa.
+
+
+WINDOWS
+-------
+1. Extraia o arquivo .zip em uma pasta comum (Documentos, Desktop, etc.).
+   Evite "C:\Program Files", pois pode nao permitir gravacao.
+2. De dois cliques em CentralCameras.exe.
+3. O navegador abrira sozinho em http://127.0.0.1:5000
+4. Mantenha a janela preta aberta enquanto estiver usando.
+   Para encerrar, feche essa janela ou pressione Ctrl+C.
+
+Se aparecer o aviso "O Windows protegeu o computador":
+   clique em "Mais informacoes" e depois em "Executar assim mesmo".
+Isso e normal em programas sem assinatura digital paga.
+
+
+LINUX
+-----
+1. Extraia o .zip.
+2. No terminal, dentro da pasta:
+
+   chmod +x CentralCameras
+   ./CentralCameras
+
+3. O navegador abre automaticamente.
+   Mantenha o terminal aberto enquanto usa.
+
+
+PRIMEIRO ACESSO
+---------------
+1. Clique em "CONFIGURACOES".
+2. Informe a pasta onde as cameras gravam os videos.
+3. Ajuste os dias de retencao.
+4. Clique em "Salvar Configuracoes".
+
+Se o pacote tiver login, use o usuario e a senha fornecidos por quem
+preparou o pacote.
+
+
+ACESSAR DE OUTRO COMPUTADOR OU CELULAR
+--------------------------------------
+O pacote inclui o modelo ".env.example". Para usar login ou liberar o
+acesso na rede, renomeie/copie esse arquivo para ".env" e edite:
+
+   HOST=0.0.0.0
+
+Reinicie o programa e acesse pelo IP do computador, por exemplo:
+
+   http://192.168.0.10:5000
+
+Use somente em rede confiavel e com o login configurado.
+
+
+ARQUIVOS IMPORTANTES
+--------------------
+config.json         Configuracoes e nomes das cameras.
+.env                Login e opcoes de rede (se incluido).
+.secret_key         Chave interna de sessao.
+central_cameras.log Registro de funcionamento e erros.
+
+Por padrao ficam na mesma pasta do executavel. Se a pasta nao permitir
+gravacao, o programa usa uma pasta de dados do usuario e mostra o
+caminho na janela ao iniciar.
+
+
+PROBLEMAS COMUNS
+----------------
+- O navegador nao abriu: abra manualmente http://127.0.0.1:5000
+- Porta 5000 ocupada: o programa tenta as proximas portas e mostra o
+  endereco correto na janela.
+- Antivirus bloqueou: adicione a pasta do programa nas excecoes.
+- Esqueci a senha: quem administra o sistema pode gerar outro hash e
+  atualizar o arquivo .env.
+- Quero atualizar: substitua apenas o executavel e mantenha config.json,
+  .env e .secret_key.
+
+
+BACKUP
+------
+Copie config.json e .env para um local seguro.

@@ -1,0 +1,7 @@
+{
+    "system": {
+        "record_root": "",
+        "retention_days": 7
+    },
+    "cameras": {}
+}

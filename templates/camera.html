@@ -60,7 +60,15 @@
 </head>
 <body class="bg-dark text-light">
     <div class="container mt-4 mb-5">
-        <a href="{{ url_for('index') }}" class="btn btn-cyber-outline mb-4">← [VOLTAR AO PAINEL PRINCIPAL]</a>
+        <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-4">
+            <a href="{{ url_for('index') }}" class="btn btn-cyber-outline">← [VOLTAR AO PAINEL PRINCIPAL]</a>
+            {% if auth_enabled %}
+            <form action="{{ url_for('logout') }}" method="POST" class="d-inline">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <button type="submit" class="btn btn-cyber-outline">⏻ [SAIR]</button>
+            </form>
+            {% endif %}
+        </div>
         <h2>NODE ACTIVE: {{ friendly_folder }}</h2>
         <p class="text-muted">ORIGIN_PATH: <code>{{ folder_name }}</code></p>
 
@@ -93,6 +101,14 @@
                 </div>
             </div>
             {% endfor %}
+            {% if not videos %}
+            <div class="col-12">
+                <div class="alert bg-dark text-warning border-warning" role="alert">
+                    > NENHUMA GRAVAÇÃO ENCONTRADA{% if search %} PARA "{{ search }}"{% endif %}.
+                    {% if search %}<a href="{{ url_for('view_camera', folder_name=folder_name) }}" class="alert-link text-warning">Limpar filtro</a>{% endif %}
+                </div>
+            </div>
+            {% endif %}
         </div>
 
         <!-- Controles de Paginação Cyber -->
@@ -102,7 +118,7 @@
                 <li class="page-item {% if page <= 1 %}disabled{% endif %}">
                     <a class="page-link bg-dark text-info border-info" href="{{ url_for('view_camera',
                     folder_name=folder_name,
-                    page=page+1,
+                    page=page-1,
                     search=search) }}">« ANTERIOR</a>
                 </li>
                 
@@ -111,7 +127,10 @@
                 </li>
 
                 <li class="page-item {% if page >= total_pages %}disabled{% endif %}">
-                    <a class="page-link bg-dark text-info border-info" href="{{ url_for('view_camera', folder_name=folder_name, page=page+1) }}">PRÓXIMA »</a>
+                    <a class="page-link bg-dark text-info border-info" href="{{ url_for('view_camera',
+                    folder_name=folder_name,
+                    page=page+1,
+                    search=search) }}">PRÓXIMA »</a>
                 </li>
             </ul>
         </nav>

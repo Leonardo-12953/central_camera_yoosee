@@ -80,16 +80,52 @@
         <div class="d-flex justify-content-between align-items-center border-bottom border-secondary pb-3 mb-4">
             <div>
                 <h1 class="mb-1">⚡ [LEO_SEC_OPS] // CENTRAL DE MONITORAMENTO</h1>
-                <p class="text-muted mb-0">> STATUS: <span class="text-status online">ONLINE (SECURE FEED)</span> | ROTINA DE PURGE: 5 DIAS ATIVA</p>
+                <p class="text-muted mb-0">> STATUS: {% if root_error %}<span class="text-status">ATENÇÃO</span>{% else %}<span class="text-status online">ONLINE (SECURE FEED)</span>{% endif %} | RETENÇÃO: {{ retention_days }} DIAS</p>
             </div>
-            <div id="live-clock" class="text-end text-warning fs-5">00:00:00</div>
-            <a href="/config"
-                class="btn btn-cyber-outline">
-        ⚙ CONFIGURAÇÕES
-            </a>
+            <div class="d-flex align-items-center gap-2 flex-wrap justify-content-end">
+                <div id="live-clock" class="text-end text-warning fs-5">00:00:00</div>
+                <a href="{{ url_for('config_page') }}"
+                    class="btn btn-cyber-outline">
+            ⚙ CONFIGURAÇÕES
+                </a>
+                {% if auth_enabled %}
+                <form action="{{ url_for('logout') }}" method="POST" class="d-inline">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <button type="submit" class="btn btn-cyber-outline">⏻ SAIR</button>
+                </form>
+                {% endif %}
+            </div>
         </div>
-        
+
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, message in messages %}
+                <div class="alert bg-dark text-{{ 'danger' if category == 'danger' else 'warning' if category == 'warning' else 'success' }} border-{{ 'danger' if category == 'danger' else 'warning' if category == 'warning' else 'success' }}" role="alert">
+                    {{ message }}
+                </div>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
+
+        {% if root_error %}
+        <div class="alert bg-dark text-warning border-warning" role="alert">
+            <strong>⚠ GRAVAÇÕES INDISPONÍVEIS:</strong> {{ root_error }}
+            <a href="{{ url_for('config_page') }}" class="alert-link text-warning">Configurar agora</a>
+        </div>
+        {% elif root_warning %}
+        <div class="alert bg-dark text-warning border-warning" role="alert">
+            <strong>⚠ AVISO:</strong> {{ root_warning }}
+        </div>
+        {% endif %}
+
         <div class="row mt-4">
+            {% if not cameras %}
+            <div class="col-12">
+                <div class="alert bg-dark text-muted border-secondary" role="alert">
+                    > NENHUM NODE DE GRAVAÇÃO ENCONTRADO.
+                </div>
+            </div>
+            {% endif %}
             {% for cam in cameras %}
             <div class="col-md-4 mb-4">
                 <div class="card card-cyber text-light h-100">
@@ -111,6 +147,7 @@
                 <div class="modal-dialog">
                     <div class="modal-content" style="background-color: #071521; border: 1px solid #00ffcc; color: #00ffcc;">
                         <form action="{{ url_for('rename_folder') }}" method="POST">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                             <div class="modal-header border-bottom border-secondary">
                                 <h5 class="modal-title">> ALTERAR_IDENTIFICADOR_NODE</h5>
                                 <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>

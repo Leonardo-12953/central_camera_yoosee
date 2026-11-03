@@ -10,3 +10,16 @@ __pycache__/
 
 *.log
 .env
+
+# Runtime gerado pela aplicação
+.secret_key
+*.lock
+config.json.bak
+config.json.*.tmp
+central_cameras.log*
+
+# Build dos executáveis
+.build-venv/
+build/
+dist/
+*.zip
