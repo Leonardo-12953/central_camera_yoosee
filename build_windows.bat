@@ -2,6 +2,11 @@
 setlocal
 cd /d "%~dp0"
 
+rem Nao precisa de administrador. Se o Windows bloquear este arquivo com
+rem "politica de Controle de Aplicativo", desbloqueie o .zip antes de
+rem extrair (botao direito > Propriedades > Desbloquear) ou rode
+rem Unblock-File. Detalhes no README.md.
+
 if not exist .build-venv (
     python -m venv .build-venv
     if errorlevel 1 goto :error
@@ -21,9 +26,11 @@ if errorlevel 1 goto :error
 
 if exist dist\CentralCameras-windows rmdir /s /q dist\CentralCameras-windows
 if exist dist\CentralCameras-windows.zip del /q dist\CentralCameras-windows.zip
-mkdir dist\CentralCameras-windows
 
-copy /y dist\CentralCameras.exe dist\CentralCameras-windows\ >nul
+rem Copia o pacote onedir completo (CentralCameras.exe + _internal).
+xcopy /e /i /y /h "dist\CentralCameras" "dist\CentralCameras-windows" >nul
+if errorlevel 1 goto :error
+
 copy /y LEIA-ME.txt dist\CentralCameras-windows\ >nul
 copy /y .env.example dist\CentralCameras-windows\ >nul
 copy /y config.example.json dist\CentralCameras-windows\ >nul

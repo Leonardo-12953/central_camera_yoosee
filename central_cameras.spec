@@ -5,7 +5,14 @@ from pathlib import Path
 from PyInstaller.utils.hooks import collect_submodules
 
 project_dir = Path(SPECPATH)
-datas = [(str(project_dir / "templates"), "templates")]
+
+# Templates e assets ficam dentro de _internal (onedir). O runtime não extrai
+# nada para %TEMP%, então não sobram pastas _MEI após fechar o programa.
+datas = [
+    (str(project_dir / "templates"), "templates"),
+    (str(project_dir / "static"), "static"),
+]
+
 hiddenimports = collect_submodules("waitress")
 
 a = Analysis(
@@ -27,9 +34,8 @@ pyz = PYZ(a.pure)
 exe = EXE(
     pyz,
     a.scripts,
-    a.binaries,
-    a.datas,
     [],
+    exclude_binaries=True,
     name="CentralCameras",
     debug=False,
     bootloader_ignore_signals=False,
@@ -43,4 +49,14 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+)
+
+coll = COLLECT(
+    exe,
+    a.binaries,
+    a.datas,
+    strip=False,
+    upx=False,
+    upx_exclude=[],
+    name="CentralCameras",
 )

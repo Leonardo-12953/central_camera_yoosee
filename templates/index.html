@@ -3,8 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <title>LEO_SYS // Operações de Segurança</title>
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-    <link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap" rel="stylesheet">
+    <link href="{{ url_for('static', filename='vendor/bootstrap/bootstrap.min.css') }}" rel="stylesheet">
+    <link href="{{ url_for('static', filename='vendor/fonts/share-tech-mono.css') }}" rel="stylesheet">
     <style>
         body {
             background-color: #030a0f;
@@ -107,6 +107,14 @@
             {% endif %}
         {% endwith %}
 
+        {% if not auth_enabled %}
+        <div class="alert bg-dark text-warning border-warning" role="alert">
+            <strong>⚠ LOGIN DESATIVADO:</strong> qualquer pessoa com acesso a este endereço pode ver as gravações.
+            Execute <code>CentralCameras.exe set-password</code> (ou <code>python app.py set-password</code>)
+            e reinicie o programa para exigir usuário e senha.
+        </div>
+        {% endif %}
+
         {% if root_error %}
         <div class="alert bg-dark text-warning border-warning" role="alert">
             <strong>⚠ GRAVAÇÕES INDISPONÍVEIS:</strong> {{ root_error }}
@@ -170,7 +178,7 @@
         </div>
     </div>
 
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="{{ url_for('static', filename='vendor/bootstrap/bootstrap.bundle.min.js') }}"></script>
     <script>
         // Relógio hacker em tempo real no topo
         setInterval(() => {

@@ -48,7 +48,7 @@ O **[ LEO_SEC_OPS ]** nasce exatamente para solucionar isso:
 * **Backend:** Python 3, Flask (Framework web minimalista e veloz) e Waitress (servidor de produção)
 * **Frontend:** HTML5, Bootstrap 5, CSS Customizado com estética Cyberpunk / Terminal (`Share Tech Mono`)
 * **Gerenciamento de Arquivos:** Manipulação nativa do sistema de ficheiros em Windows/Linux (`os`, `pathlib`, `re`, `datetime`, `math`)
-* **Distribuição:** PyInstaller (executável único e portátil, sem exigir Python no computador do cliente)
+* **Distribuição:** PyInstaller em modo **onedir** (pasta com `CentralCameras` + `_internal`, sem exigir Python no computador do cliente)
 
 ---
 
@@ -57,7 +57,7 @@ O **[ LEO_SEC_OPS ]** nasce exatamente para solucionar isso:
 1. Tenha o **Python 3.10+** instalado (Windows ou Linux).
 2. Clone o repositório:
    ```bash
-   git clone https://github.com/Leonardo-12953/central_cameras.git
+   git clone https://github.com/Leonardo-12953/central_camera_yoosee.git
    cd central_cameras
    ```
 3. Crie o ambiente virtual e instale as dependências.
@@ -87,13 +87,19 @@ Por padrão o servidor escuta apenas em `127.0.0.1`. Para expor na rede, configu
 
 ### Login de acesso
 
-Para exigir usuário e senha, defina `APP_USERNAME` junto de `APP_PASSWORD_HASH` (recomendado) ou `APP_PASSWORD` (texto puro). O jeito mais simples é criar um arquivo `.env` na raiz do projeto, que é carregado automaticamente e já está no `.gitignore`:
+Para exigir usuário e senha, o jeito mais simples é rodar o comando `set-password`, que grava `APP_USERNAME` e `APP_PASSWORD_HASH` no arquivo `.env` (já ignorado pelo Git):
 
 ```bash
-python app.py hash-password
+python app.py set-password
 ```
 
-Copie o hash gerado e crie o `.env`:
+No executável:
+
+```bat
+CentralCameras.exe set-password
+```
+
+Se preferir gerar o hash manualmente, use `python app.py hash-password` e crie o `.env`:
 
 ```env
 APP_USERNAME=admin
@@ -108,7 +114,9 @@ python app.py
 
 Reinicie o processo depois de alterar o `.env`. Você será redirecionado para a tela de login; a sessão fica válida por `AUTH_SESSION_LIFETIME_MINUTES` e há limite de tentativas por IP.
 
-> Se `APP_USERNAME` e uma senha/hash não forem definidos, o sistema continua aberto, sem tela de login. Use isso somente em ambiente local.
+> Se `APP_USERNAME` e uma senha/hash não forem definidos, o sistema continua aberto, sem tela de login, e o painel mostra um aviso amarelo. Use isso somente em ambiente local.
+
+> O `.env` e o `config.json` aceitam UTF-8 (com ou sem BOM), UTF-16 e ANSI. Isso evita que o login seja desativado silenciosamente por um BOM ou que o programa não inicie com um arquivo salvo como “Unicode” no Notepad.
 
 ### Variáveis de ambiente
 
@@ -122,7 +130,7 @@ Reinicie o processo depois de alterar o `.env`. Você será redirecionado para a
 | `CAMERAS_CONFIG` | `config.json` ao lado do executável/app.py | Caminho absoluto ou relativo do JSON de configuração. |
 | `SECRET_KEY` | arquivo `.secret_key` gerado | Chave de sessão/CSRF. |
 | `APP_USERNAME` | vazio | Usuário da tela de login. |
-| `APP_PASSWORD_HASH` | vazio | Hash da senha gerado por `python app.py hash-password` (recomendado). |
+| `APP_PASSWORD_HASH` | vazio | Hash da senha gerado por `python app.py hash-password` ou `set-password` (recomendado). |
 | `APP_PASSWORD` | vazio | Senha em texto puro; use apenas para testes locais. |
 | `AUTH_SESSION_LIFETIME_MINUTES` | `720` | Duração da sessão autenticada, em minutos. |
 | `LOGIN_MAX_ATTEMPTS` | `5` | Tentativas de login permitidas por IP dentro da janela. |
@@ -141,12 +149,14 @@ As variáveis também podem ser definidas em um arquivo `.env` na raiz do projet
 
 ### 📦 Gerar executável para clientes
 
-O cliente final **não precisa instalar Python, Git nem dependências**. O build gera um executável único para cada sistema:
+O cliente final **não precisa instalar Python, Git nem dependências**. O build gera um pacote **onedir** (pasta) para cada sistema:
 
 - Windows: `dist/CentralCameras-windows.zip`
 - Linux: `dist/CentralCameras-linux.zip`
 
-Cada pacote inclui o executável, `LEIA-ME.txt`, `.env.example` e `config.example.json`.
+Cada pacote inclui o executável, a pasta `_internal` (bibliotecas, templates e assets offline), `LEIA-ME.txt`, `.env.example` e `config.example.json`.
+
+> O modo onedir foi escolhido de propósito: o antigo executável único extraía ~16 MB para `%TEMP%\_MEIxxxx` a cada execução e deixava essa pasta para trás quando a janela era fechada à força. O onedir não extrai nada em tempo de execução.
 
 **No Windows**, execute:
 
@@ -163,6 +173,14 @@ chmod +x build_linux.sh
 
 Os scripts criam uma venv isolada em `.build-venv`, instalam PyInstaller e montam o `.zip`. O PyInstaller **não faz compilação cruzada**: para gerar o `.exe` é necessário rodar no Windows, e o binário Linux no Linux.
 
+> **Windows: não é necessário executar como administrador.** Se o duplo clique em `build_windows.bat` não fizer nada ou aparecer **“Uma política de Controle de Aplicativo bloqueou este arquivo. Extensão de arquivo perigosa do web”**, o Smart App Control marcou os arquivos como baixados da internet. Antes de extrair, clique com o botão direito no `.zip` → **Propriedades** → marque **Desbloquear** → **Aplicar**. Se o projeto já estiver extraído, rode no PowerShell:
+>
+> ```powershell
+> Get-ChildItem -LiteralPath . -Recurse -File | Unblock-File
+> ```
+>
+> Depois disso o build funciona com duplo clique, sem elevação.
+
 **Pelo GitHub Actions** (recomendado para ter os dois):
 
 1. Envie o projeto para um repositório no GitHub.
@@ -176,6 +194,8 @@ Os scripts criam uma venv isolada em `.build-venv`, instalam PyInstaller e monta
 
 O executável é portátil: `config.json`, `.env` e `.secret_key` ficam na mesma pasta. Se essa pasta não permitir gravação (por exemplo, `C:\Program Files`), o programa usa automaticamente `%APPDATA%\CentralCameras` no Windows ou `~/.local/share/central_cameras` no Linux, e mostra o caminho no log.
 
+> Para atualizar uma instalação, substitua o executável **e** a pasta `_internal` juntos. Mantenha `config.json`, `.env` e `.secret_key`. Não separe o executável da pasta `_internal`.
+
 > O executável não é assinado digitalmente. No Windows pode aparecer o SmartScreen; o cliente deve clicar em **Mais informações → Executar assim mesmo**. O guia do cliente está em `LEIA-ME.txt`.
 
 ### Limpeza de gravações
@@ -186,13 +206,29 @@ O processo principal inicia um agendador interno de limpeza. Para ambientes WSGI
 python app.py purge
 ```
 
+Para apenas **simular** a limpeza, sem apagar nada:
+
+```bash
+python app.py purge --dry-run
+```
+
+```bat
+CentralCameras.exe purge --dry-run
+```
+
 A limpeza:
-- valida o caminho configurado e recusa raízes perigosas como `/`, `/home`, `/mnt`, `/etc` e similares;
+- respeita uma retenção mínima de **2 dias** (valores menores são ajustados automaticamente);
+- valida o caminho configurado e recusa raízes perigosas como `/`, `/home`, `/mnt`, `/etc`, `C:\`, `C:\Windows`, `C:\Users`, `C:\Program Files` e similares;
+- aceita caminhos colados do Explorer com aspas e expande variáveis como `%USERPROFILE%`;
 - percorre subdiretórios sem seguir symlinks;
 - remove apenas arquivos `.mp4` regulares;
 - ignora arquivos modificados nos últimos `ACTIVE_FILE_GRACE_SECONDS`;
 - usa travamento de arquivo para evitar duas limpezas simultâneas;
 - registra quantos arquivos removeu, erros e itens ignorados.
+
+### Assets offline
+
+Bootstrap 5.3 e a fonte Share Tech Mono são empacotados em `static/vendor`. O painel, os modais de apelido e o visual funcionam sem conexão com a internet; a CSP não permite mais scripts/estilos de CDN.
 
 ### Segurança e operação
 

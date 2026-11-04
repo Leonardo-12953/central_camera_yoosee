@@ -14,8 +14,11 @@ __pycache__/
 # Runtime gerado pela aplicação
 .secret_key
 *.lock
+config.json
 config.json.bak
 config.json.*.tmp
+.write-test-*
+*.bak
 central_cameras.log*
 
 # Build dos executáveis

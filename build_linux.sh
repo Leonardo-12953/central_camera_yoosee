@@ -25,7 +25,8 @@ PACKAGE_DIR="dist/CentralCameras-linux"
 rm -rf "$PACKAGE_DIR"
 mkdir -p "$PACKAGE_DIR"
 
-cp dist/CentralCameras "$PACKAGE_DIR/"
+# Copia o pacote onedir completo (binário + _internal).
+cp -a dist/CentralCameras/. "$PACKAGE_DIR/"
 cp LEIA-ME.txt .env.example config.example.json "$PACKAGE_DIR/"
 chmod +x "$PACKAGE_DIR/CentralCameras"
 

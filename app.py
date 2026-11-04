@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import codecs
 import getpass
 import hashlib
 import hmac
 import json
+import locale
 import logging
 import math
 import os
@@ -54,6 +56,37 @@ RESOURCE_DIR = (
 )
 TEMPLATES_DIR = RESOURCE_DIR / "templates"
 
+# Logger mínimo disponível antes da configuração completa de logging.
+logger = logging.getLogger("central_cameras")
+
+
+def _read_text_robust(path: Path) -> str:
+    """Lê texto aceitando UTF-8, UTF-8 com BOM, UTF-16 (Notepad) e ANSI.
+
+    Arquivos salvos pelo Notepad/VS Code/PowerShell às vezes ganham BOM ou
+    são gravados em UTF-16. Sem esse tratamento, o login era desativado sem
+    aviso (BOM na primeira chave) ou o app nem iniciava (UTF-16).
+    """
+
+    raw = path.read_bytes()
+
+    if raw.startswith(codecs.BOM_UTF8):
+        return raw.decode("utf-8-sig")
+
+    if raw.startswith(codecs.BOM_UTF16_LE) or raw.startswith(codecs.BOM_UTF16_BE):
+        return raw.decode("utf-16")
+
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError:
+        fallback = locale.getpreferredencoding(False) or "utf-8"
+        logger.warning(
+            "%s não está em UTF-8; lendo com a codificação local (%s).",
+            path,
+            fallback,
+        )
+        return raw.decode(fallback, errors="replace")
+
 
 def _load_dotenv(path: Path) -> None:
     """Carrega um .env simples sem sobrescrever variáveis já definidas."""
@@ -62,7 +95,9 @@ def _load_dotenv(path: Path) -> None:
         if not path.is_file():
             return
 
-        for raw_line in path.read_text(encoding="utf-8").splitlines():
+        content = _read_text_robust(path)
+
+        for raw_line in content.splitlines():
             line = raw_line.strip()
             if not line or line.startswith("#"):
                 continue
@@ -82,23 +117,25 @@ def _load_dotenv(path: Path) -> None:
                 value = value[1:-1]
 
             os.environ.setdefault(key, value)
-    except OSError:
-        pass
+    except (OSError, UnicodeError) as exc:
+        logger.warning("Não foi possível ler %s: %s", path, exc)
 
 
 def _is_writable_directory(path: Path) -> bool:
+    probe = None
     try:
         path.mkdir(parents=True, exist_ok=True)
         descriptor, probe = tempfile.mkstemp(prefix=".write-test-", dir=str(path))
+        os.close(descriptor)
+        return True
     except OSError:
         return False
-
-    os.close(descriptor)
-    try:
-        os.unlink(probe)
-    except OSError:
-        pass
-    return True
+    finally:
+        if probe:
+            try:
+                os.unlink(probe)
+            except OSError:
+                pass
 
 
 def _select_data_dir() -> Path:
@@ -144,7 +181,7 @@ CLEANUP_LOCK_FILE = CONFIG_FILE.with_name(".cleanup.lock")
 SECRET_FILE = DATA_DIR / ".secret_key"
 
 DEFAULT_RETENTION_DAYS = 7
-MIN_RETENTION_DAYS = 1
+MIN_RETENTION_DAYS = 2
 MAX_RETENTION_DAYS = 3650
 MAX_ALIAS_LENGTH = 120
 
@@ -247,7 +284,7 @@ def _load_secret_key() -> str:
 
     try:
         if SECRET_FILE.exists():
-            stored = SECRET_FILE.read_text(encoding="utf-8").strip()
+            stored = _read_text_robust(SECRET_FILE).strip()
             if stored:
                 return stored
 
@@ -261,7 +298,7 @@ def _load_secret_key() -> str:
             )
         except FileExistsError:
             # Outro processo criou a chave primeiro; reutiliza a dele.
-            stored = SECRET_FILE.read_text(encoding="utf-8").strip()
+            stored = _read_text_robust(SECRET_FILE).strip()
             if stored:
                 return stored
 
@@ -287,7 +324,12 @@ def _load_secret_key() -> str:
         return secrets.token_hex(32)
 
 
-app = Flask(__name__, template_folder=str(TEMPLATES_DIR))
+app = Flask(
+    __name__,
+    template_folder=str(TEMPLATES_DIR),
+    static_folder=str(RESOURCE_DIR / "static"),
+    static_url_path="/static",
+)
 app.secret_key = _load_secret_key()
 app.config.update(
     MAX_CONTENT_LENGTH=_env_int("MAX_CONTENT_LENGTH", 1024 * 1024, minimum=1024),
@@ -295,7 +337,10 @@ app.config.update(
     MAX_FORM_PARTS=100,
     SESSION_COOKIE_HTTPONLY=True,
     SESSION_COOKIE_SAMESITE="Lax",
-    SESSION_COOKIE_SECURE=os.environ.get("SESSION_COOKIE_SECURE", "0") == "1",
+    SESSION_COOKIE_SECURE=os.environ.get("SESSION_COOKIE_SECURE", "0")
+    .strip()
+    .lower()
+    in {"1", "true", "yes", "on"},
 )
 
 _trusted_hosts = [
@@ -321,6 +366,13 @@ if bool(AUTH_USERNAME) != bool(AUTH_PASSWORD or AUTH_PASSWORD_HASH):
     logger.warning(
         "APP_USERNAME e APP_PASSWORD (ou APP_PASSWORD_HASH) precisam ser "
         "definidos juntos; autenticação desativada."
+    )
+
+if not AUTH_ENABLED:
+    logger.warning(
+        "Autenticação desativada: o painel está acessível sem login. "
+        "Defina APP_USERNAME e APP_PASSWORD_HASH (ou APP_PASSWORD) no .env "
+        "para exigir usuário e senha."
     )
 
 AUTH_SESSION_VERSION = hashlib.sha256(
@@ -361,17 +413,102 @@ DANGEROUS_ROOTS = {
     "/dev",
     "/etc",
     "/home",
+    "/lib",
+    "/lib64",
     "/media",
     "/mnt",
     "/opt",
     "/proc",
     "/root",
+    "/run",
     "/sbin",
+    "/snap",
     "/sys",
     "/tmp",
     "/usr",
     "/var",
 }
+
+# Subárvores de sistema que nunca devem ser usadas como raiz de gravações.
+# /home, /mnt, /media, /root e /tmp ficam de fora de propósito: é comum ter
+# gravações em subpastas desses locais (ex.: /mnt/gigastorage/record).
+DANGEROUS_SUBTREES = {
+    "/bin",
+    "/boot",
+    "/dev",
+    "/etc",
+    "/lib",
+    "/lib64",
+    "/proc",
+    "/run",
+    "/sbin",
+    "/snap",
+    "/sys",
+    "/usr",
+    "/var",
+}
+
+
+def _path_key(path: Path | str) -> str:
+    return os.path.normcase(os.path.realpath(str(path)))
+
+
+def _same_path(left: Path, right: Path) -> bool:
+    return _path_key(left) == _path_key(right)
+
+
+def _is_within(path: Path, parent: Path) -> bool:
+    child_key = _path_key(path)
+    parent_key = _path_key(parent)
+    try:
+        return os.path.commonpath([child_key, parent_key]) == parent_key
+    except ValueError:
+        return False
+
+
+def _windows_protected_subtrees() -> set[Path]:
+    """Pastas de sistema do Windows que não podem ser raiz de gravações."""
+
+    protected: set[Path] = set()
+
+    for name in (
+        "SystemRoot",
+        "windir",
+        "ProgramFiles",
+        "ProgramFiles(x86)",
+        "ProgramW6432",
+        "ProgramData",
+        "APPDATA",
+        "LOCALAPPDATA",
+        "TEMP",
+        "TMP",
+    ):
+        value = os.environ.get(name, "").strip()
+        if value:
+            protected.add(Path(value))
+
+    try:
+        home = Path.home()
+        protected.add(home / "AppData")
+        for name in ("Public", "Default", "All Users", "Default User"):
+            protected.add(home.parent / name)
+    except (OSError, RuntimeError):
+        pass
+
+    system_drive = os.environ.get("SystemDrive", "").strip()
+    if system_drive:
+        drive = Path(system_drive + "\\")
+        for name in (
+            "$Recycle.Bin",
+            "System Volume Information",
+            "Recovery",
+            "PerfLogs",
+            "Boot",
+            "EFI",
+        ):
+            protected.add(drive / name)
+
+    return protected
 
 
 def _coerce_retention(value: Any) -> int:
@@ -469,8 +606,7 @@ def config_lock(exclusive: bool = True) -> Iterator[None]:
 
 
 def _read_json_file(path: Path) -> Any:
-    with path.open("r", encoding="utf-8") as handle:
-        return json.load(handle)
+    return json.loads(_read_text_robust(path))
 
 
 def _read_config_unlocked() -> dict[str, Any]:
@@ -561,26 +697,58 @@ def update_config(mutator: Callable[[dict[str, Any]], Any]) -> tuple[dict[str, A
 
 
 def _is_dangerous_root(path: Path) -> bool:
+    # Raiz de volume (C:\, D:\ ou /) nunca pode ser usada.
     if path.parent == path:
         return True
+
+    try:
+        home = Path.home().resolve()
+    except (OSError, RuntimeError):
+        home = None
+
+    if os.name == "nt":
+        # A própria pasta do usuário e a pasta que contém todos os perfis.
+        if home is not None and (_same_path(path, home) or _same_path(path, home.parent)):
+            return True
+
+        # Windows, Program Files, ProgramData, AppData, Temp etc.
+        for protected in _windows_protected_subtrees():
+            if _is_within(path, protected):
+                return True
+
+        return False
 
     resolved = str(path)
     if resolved in DANGEROUS_ROOTS:
         return True
 
-    try:
-        home = str(Path.home().resolve())
-    except (OSError, RuntimeError):
-        home = ""
+    if home is not None and resolved == str(home):
+        return True
 
-    return bool(home and resolved == home)
+    for protected in DANGEROUS_SUBTREES:
+        if _is_within(path, Path(protected)):
+            return True
+
+    return False
+
+
+def _normalize_user_path(raw_root: str) -> str:
+    """Aceita caminho colado do Explorer, com %VAR% e com ~."""
+
+    value = raw_root.strip()
+
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+        value = value[1:-1].strip()
+
+    value = os.path.expandvars(value)
+    return value
 
 
 def check_record_root(raw_root: Any) -> tuple[str | None, str | None]:
     if not isinstance(raw_root, str) or not raw_root.strip():
         return None, "Caminho das gravações não configurado."
 
-    value = raw_root.strip()
+    value = _normalize_user_path(raw_root)
     path = Path(value).expanduser()
 
     if not path.is_absolute():
@@ -744,7 +912,7 @@ def cleanup_lock() -> Iterator[bool]:
         lock_handle.close()
 
 
-def limpar_gravacoes_antigas() -> int:
+def limpar_gravacoes_antigas(dry_run: bool = False) -> int:
     active_grace = _env_int("ACTIVE_FILE_GRACE_SECONDS", 600, minimum=0)
 
     try:
@@ -762,11 +930,22 @@ def limpar_gravacoes_antigas() -> int:
                 )
                 return 0
 
-            retention_days = config["system"]["retention_days"]
+            retention_days = max(
+                MIN_RETENTION_DAYS,
+                int(config["system"]["retention_days"]),
+            )
             cutoff = time.time() - (retention_days * 86400)
             removed = 0
             errors = 0
             skipped = 0
+
+            logger.info(
+                "%s em %s: retenção de %d dias (corta antes de %s).",
+                "Simulação de limpeza (nada será apagado)" if dry_run else "Limpeza",
+                root,
+                retention_days,
+                datetime.fromtimestamp(cutoff).strftime("%d/%m/%Y %H:%M:%S"),
+            )
 
             def on_walk_error(exc: OSError) -> None:
                 nonlocal errors
@@ -805,6 +984,15 @@ def limpar_gravacoes_antigas() -> int:
                         if file_stat.st_mtime >= cutoff:
                             continue
 
+                        if dry_run:
+                            removed += 1
+                            logger.info(
+                                "[DRY-RUN] Removeria (%s dias de retenção): %s",
+                                retention_days,
+                                file_path,
+                            )
+                            continue
+
                         os.remove(file_path)
                         removed += 1
                         logger.debug(
@@ -817,10 +1005,12 @@ def limpar_gravacoes_antigas() -> int:
                         logger.warning("Falha ao remover %s: %s", file_path, exc)
 
             logger.info(
-                "Limpeza concluída em %s: %d removidos, %d erros, %d ignorados, "
+                "%s concluída em %s: %d %s, %d erros, %d ignorados, "
                 "%d dias de retenção.",
+                "Simulação" if dry_run else "Limpeza",
                 root,
                 removed,
+                "seriam removidos" if dry_run else "removidos",
                 errors,
                 skipped,
                 retention_days,
@@ -835,7 +1025,9 @@ def start_cleanup_scheduler() -> None:
     interval = _env_int("CLEANUP_INTERVAL_SECONDS", 3600, minimum=60)
 
     def cleanup_loop() -> None:
-        time.sleep(5)
+        # Pequena carência para o operador abrir as configurações e conferir
+        # a pasta/retenção antes da primeira limpeza automática.
+        time.sleep(30)
         while True:
             try:
                 limpar_gravacoes_antigas()
@@ -857,6 +1049,84 @@ def _secure_compare(value: str, expected: str) -> bool:
         value.encode("utf-8", "surrogatepass"),
         expected.encode("utf-8", "surrogatepass"),
     )
+
+
+def _write_text_atomic(path: Path, text: str, mode: int = 0o600) -> None:
+    """Grava texto em UTF-8 sem BOM de forma atômica."""
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    fd, temporary_name = tempfile.mkstemp(
+        prefix=path.name + ".",
+        suffix=".tmp",
+        dir=str(path.parent),
+    )
+
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
+            handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
+
+        try:
+            os.chmod(temporary_name, mode)
+        except OSError:
+            pass
+
+        os.replace(temporary_name, path)
+    except BaseException:
+        try:
+            os.unlink(temporary_name)
+        except OSError:
+            pass
+        raise
+
+
+def _env_quote(value: str) -> str:
+    """Formata um valor para o .env, usando aspas só quando necessário."""
+
+    if value and not re.search(r"[\s#'\"]", value) and value == value.strip():
+        return value
+    return "'" + value.replace("'", "") + "'"
+
+
+def _update_env_file(path: Path, updates: dict[str, str | None]) -> None:
+    """Atualiza chaves do .env preservando comentários e outras linhas."""
+
+    lines: list[str] = []
+    if path.is_file():
+        try:
+            lines = _read_text_robust(path).splitlines()
+        except (OSError, UnicodeError):
+            lines = []
+
+    remaining = dict(updates)
+    handled: set[str] = set()
+    output: list[str] = []
+
+    for raw_line in lines:
+        stripped = raw_line.strip()
+        candidate = stripped[7:].lstrip() if stripped.startswith("export ") else stripped
+        key = candidate.split("=", 1)[0].strip() if "=" in candidate else ""
+
+        if key and key in remaining:
+            # Remove também chaves duplicadas, para não sobrar uma senha antiga.
+            if key in handled:
+                continue
+            handled.add(key)
+            value = remaining[key]
+            if value is not None:
+                output.append(f"{key}={value}")
+            continue
+
+        output.append(raw_line)
+
+    for key, value in remaining.items():
+        if key not in handled and value is not None:
+            output.append(f"{key}={value}")
+
+    content = "\n".join(output).strip("\n")
+    _write_text_atomic(path, content + "\n" if content else "")
 
 
 def _safe_next_url(value: Any) -> str | None:
@@ -1017,9 +1287,9 @@ def add_security_headers(response: Response) -> Response:
     response.headers.setdefault(
         "Content-Security-Policy",
         "default-src 'self'; "
-        "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
-        "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://fonts.googleapis.com; "
-        "font-src 'self' https://fonts.gstatic.com; "
+        "script-src 'self' 'unsafe-inline'; "
+        "style-src 'self' 'unsafe-inline'; "
+        "font-src 'self'; "
         "img-src 'self' data:; "
         "media-src 'self'; "
         "connect-src 'self'; "
@@ -1413,6 +1683,30 @@ def _open_browser(url: str) -> None:
         logger.warning("Não foi possível abrir o navegador automaticamente.")
 
 
+def _open_browser_when_ready(url: str, timeout: float = 45.0) -> None:
+    """Abre o navegador só quando o servidor começa a responder."""
+
+    parsed = urlsplit(url)
+    host = parsed.hostname or "127.0.0.1"
+    if host in {"0.0.0.0", "::"}:
+        host = "127.0.0.1"
+    port = parsed.port or 80
+
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            with socket.create_connection((host, port), timeout=1.0):
+                _open_browser(url)
+                return
+        except OSError:
+            time.sleep(0.5)
+
+    logger.warning(
+        "O servidor não respondeu em %s; abra o endereço manualmente no navegador.",
+        url,
+    )
+
+
 def _pause_if_frozen() -> None:
     if not FROZEN:
         return
@@ -1420,6 +1714,109 @@ def _pause_if_frozen() -> None:
         input("\nPressione Enter para fechar...")
     except (EOFError, OSError):
         pass
+
+
+def _read_redirected_line() -> str:
+    """Lê uma linha do stdin redirecionado tentando UTF-8 e depois o locale."""
+
+    if sys.stdin is None:
+        return ""
+
+    buffer = getattr(sys.stdin, "buffer", None)
+    if buffer is not None:
+        try:
+            raw = buffer.readline()
+        except (OSError, ValueError):
+            return ""
+
+        if not raw:
+            return ""
+
+        encodings = ["utf-8"]
+        fallback = locale.getpreferredencoding(False)
+        if fallback and fallback.lower() not in {"utf-8", "utf8"}:
+            encodings.append(fallback)
+
+        for encoding in encodings:
+            try:
+                return raw.decode(encoding).rstrip("\r\n")
+            except (UnicodeDecodeError, LookupError):
+                continue
+
+        return raw.decode("utf-8", errors="replace").rstrip("\r\n")
+
+    try:
+        return sys.stdin.readline().rstrip("\r\n")
+    except (EOFError, OSError):
+        return ""
+
+
+def _prompt_line(prompt: str, secret: bool = False) -> str:
+    """Lê uma linha do usuário sem travar quando o stdin está redirecionado.
+
+    O getpass do Windows usa a API do console e trava se a entrada vier de um
+    pipe (script, CI, redirecionamento). Nesse caso lemos direto do stdin.
+    """
+
+    if sys.stdin is not None and not sys.stdin.isatty():
+        return _read_redirected_line()
+
+    if secret:
+        try:
+            return getpass.getpass(prompt)
+        except (EOFError, OSError):
+            pass
+
+    try:
+        return input(prompt)
+    except (EOFError, OSError):
+        return ""
+
+
+def cmd_set_password() -> int:
+    """Cria/atualiza o .env com usuário e hash de senha, sem exigir Python."""
+
+    env_path = DATA_DIR / ".env"
+
+    print("=== Configuração de login da Central de Câmeras ===")
+    print(f"Arquivo: {env_path}")
+    print("Pressione Enter para usar o usuário padrão (admin).\n")
+
+    username = _prompt_line("Usuário [admin]: ").strip() or "admin"
+    if not re.fullmatch(r"[^\s=#\"']+", username):
+        print(
+            "Usuário inválido: não use espaços, '=', '#', aspas ou quebras de linha.",
+            file=sys.stderr,
+        )
+        return 1
+
+    password = _prompt_line("Nova senha (mínimo 8 caracteres): ", secret=True)
+    if len(password) < 8:
+        print("A senha deve ter pelo menos 8 caracteres.", file=sys.stderr)
+        return 1
+
+    confirmation = _prompt_line("Confirme a senha: ", secret=True)
+    if not _secure_compare(password, confirmation):
+        print("As senhas não coincidem.", file=sys.stderr)
+        return 1
+
+    try:
+        _update_env_file(
+            env_path,
+            {
+                "APP_USERNAME": _env_quote(username),
+                "APP_PASSWORD_HASH": _env_quote(generate_password_hash(password)),
+                # Evita manter a senha em texto puro no arquivo.
+                "APP_PASSWORD": None,
+            },
+        )
+    except OSError as exc:
+        print(f"Não foi possível gravar {env_path}: {exc}", file=sys.stderr)
+        return 1
+
+    print(f"\nLogin configurado com sucesso em {env_path}.")
+    print("Reinicie a Central de Câmeras para aplicar.")
+    return 0
 
 
 def ensure_config_file() -> None:
@@ -1442,27 +1839,44 @@ def main() -> None:
         len(sys.argv) > 1
         and sys.argv[1].lower() in {"hash-password", "hash_password"}
     ):
-        password = getpass.getpass("Nova senha: ")
+        password = _prompt_line("Nova senha: ", secret=True)
         if len(password) < 8:
             print("A senha deve ter pelo menos 8 caracteres.", file=sys.stderr)
             raise SystemExit(1)
 
-        confirmation = getpass.getpass("Confirme a senha: ")
-        if not hmac.compare_digest(password, confirmation):
+        confirmation = _prompt_line("Confirme a senha: ", secret=True)
+        if not _secure_compare(password, confirmation):
             print("As senhas não coincidem.", file=sys.stderr)
             raise SystemExit(1)
 
         print(generate_password_hash(password))
         print(
             "\nDefina APP_PASSWORD_HASH com o valor acima "
-            "(e APP_USERNAME com o nome de usuário).",
+            "(e APP_USERNAME com o nome de usuário).\n"
+            "Dica: use o comando 'set-password' para gravar isso no .env "
+            "automaticamente.",
             file=sys.stderr,
         )
         return
 
+    if len(sys.argv) > 1 and sys.argv[1].lower() in {
+        "set-password",
+        "set_password",
+    }:
+        raise SystemExit(cmd_set_password())
+
     if len(sys.argv) > 1 and sys.argv[1].lower() in {"purge", "cleanup"}:
-        removed = limpar_gravacoes_antigas()
-        logger.info("Purge manual finalizado: %d arquivo(s) removido(s).", removed)
+        options = {argument.lower() for argument in sys.argv[2:]}
+        dry_run = "--dry-run" in options or "-n" in options
+        removed = limpar_gravacoes_antigas(dry_run=dry_run)
+
+        if dry_run:
+            logger.info(
+                "Simulação de purge finalizada: %d arquivo(s) seriam removidos.",
+                removed,
+            )
+        else:
+            logger.info("Purge manual finalizado: %d arquivo(s) removido(s).", removed)
         return
 
     debug = os.environ.get("FLASK_DEBUG", "0").lower() in {"1", "true", "yes", "on"}
@@ -1509,7 +1923,12 @@ def main() -> None:
         open_browser.lower() in {"1", "true", "yes", "on"}
         and main_process
     ):
-        threading.Timer(1.2, _open_browser, args=(url,)).start()
+        threading.Thread(
+            target=_open_browser_when_ready,
+            args=(url,),
+            name="central-cameras-browser",
+            daemon=True,
+        ).start()
 
     logger.info("Painel disponível em %s", url)
     logger.info("Para encerrar, feche esta janela ou pressione Ctrl+C.")
@@ -1549,4 +1968,13 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        logger.info("Central de Câmeras encerrada pelo usuário.")
+    except SystemExit:
+        raise
+    except Exception:
+        logger.exception("Erro fatal ao iniciar a Central de Câmeras.")
+        _pause_if_frozen()
+        raise SystemExit(1) from None
