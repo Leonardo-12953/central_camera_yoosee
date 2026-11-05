@@ -1400,9 +1400,9 @@ def inject_auth_state() -> dict[str, Any]:
 
 @app.before_request
 def require_authentication() -> Response | None:
-    # A tela de primeiro acesso, a de login e a recuperação local são as
-    # únicas páginas abertas. Todo o resto exige sessão autenticada.
-    if request.endpoint in {"login", "setup", "recover", "static"}:
+    # A tela de boas-vindas, a de primeiro acesso, a de login e a recuperação
+    # local são as únicas páginas abertas. Todo o resto exige sessão autenticada.
+    if request.endpoint in {"welcome", "login", "setup", "recover", "static"}:
         return None
 
     if not auth_is_configured():
@@ -1510,7 +1510,7 @@ def setup() -> str | Response:
     """Cria a conta de acesso no primeiro uso, direto pelo navegador."""
 
     if auth_is_configured():
-        return redirect(url_for("index") if _is_authenticated() else url_for("login"))
+        return redirect(url_for("cameras") if _is_authenticated() else url_for("login"))
 
     error_message = None
     username = "admin"
@@ -1556,7 +1556,7 @@ def login() -> str | Response:
     next_url = _safe_next_url(request.values.get("next"))
 
     if _is_authenticated():
-        return redirect(next_url or url_for("index"))
+        return redirect(next_url or url_for("cameras"))
 
     error_message = None
     username = ""
@@ -1583,7 +1583,7 @@ def login() -> str | Response:
                 _clear_login_failures(client_ip)
                 _start_session(record)
                 logger.info("Login bem-sucedido de %s.", client_ip)
-                return redirect(next_url or url_for("index"))
+                return redirect(next_url or url_for("cameras"))
 
         _record_login_failure(client_ip)
         logger.warning("Tentativa de login inválida de %s.", client_ip)
@@ -1644,7 +1644,7 @@ def recover() -> str | Response:
             _clear_login_failures(request.remote_addr or "desconhecido")
             logger.info("Senha redefinida localmente para %s.", record["username"])
             flash("Senha alterada com sucesso.", "success")
-            return redirect(url_for("index"))
+            return redirect(url_for("cameras"))
 
         return (
             render_template(
@@ -1687,7 +1687,7 @@ def change_password() -> str | Response:
             _start_session(record)
             logger.info("Senha alterada por %s.", record["username"])
             flash("Senha alterada com sucesso.", "success")
-            return redirect(url_for("index"))
+            return redirect(url_for("cameras"))
 
         return (
             render_template("password.html", error_message=error_message),
@@ -1710,7 +1710,17 @@ def logout() -> Response:
 
 
 @app.route("/")
-def index() -> str:
+def welcome() -> str | Response:
+    """Tela pública de boas-vindas, antes do login."""
+
+    if _is_authenticated():
+        return redirect(url_for("cameras"))
+
+    return render_template("welcome.html")
+
+
+@app.route("/cameras")
+def cameras() -> str:
     config = load_config()
     system = config["system"]
     aliases = config["cameras"]
@@ -1913,7 +1923,7 @@ def config_page() -> str | Response:
             retention_days,
         )
         flash("Configuração salva com sucesso.", "success")
-        return redirect(url_for("index"))
+        return redirect(url_for("cameras"))
 
     record_root, root_error = check_record_root(system["record_root"])
     root_warning = None
@@ -1962,7 +1972,7 @@ def rename_folder() -> Response:
     update_config(mutate)
     logger.info("Alias atualizado: %s -> %s", folder_name, new_friendly)
     flash("Nome da câmera atualizado.", "success")
-    return redirect(url_for("index"))
+    return redirect(url_for("cameras"))
 
 
 def _find_available_port(host: str, preferred: int, attempts: int = 20) -> int:

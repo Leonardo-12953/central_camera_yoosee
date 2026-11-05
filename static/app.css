@@ -559,6 +559,45 @@ input:focus {
     text-align: center;
 }
 
+/* ---------- Tela de boas-vindas ---------- */
+
+.welcome-shell {
+    max-width: 460px;
+}
+
+.welcome-mark {
+    font-size: 2rem;
+    line-height: 1;
+    margin-bottom: 0.4rem;
+}
+
+.welcome-brand .logo {
+    font-size: 1.05rem;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+
+.welcome-card {
+    padding: 2.2rem 1.6rem;
+    text-align: center;
+}
+
+.welcome-card h1 {
+    font-size: clamp(1.4rem, 4vw, 1.7rem);
+    margin-bottom: 0.6rem;
+}
+
+.welcome-card .lead {
+    margin-bottom: 1.5rem;
+}
+
+.welcome-footnote {
+    color: var(--muted);
+    font-size: 0.82rem;
+    margin-top: 1rem;
+    text-align: center;
+}
+
 /* ---------- Página de erro ---------- */
 
 .error-box {

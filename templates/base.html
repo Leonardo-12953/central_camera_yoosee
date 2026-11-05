@@ -4,15 +4,15 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="robots" content="noindex, nofollow">
-    <title>{% block title %}Central de Câmeras{% endblock %}</title>
+    <title>{% block title %}LYSec Play{% endblock %}</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
 </head>
 <body>
     <header class="topbar">
         <div class="container topbar-inner">
-            <a class="brand" href="{{ url_for('index') }}">📹 Central de Câmeras</a>
+            <a class="brand" href="{{ url_for('cameras') }}">📹 LYSec Play</a>
             <nav class="nav" aria-label="Menu principal">
-                <a href="{{ url_for('index') }}">Início</a>
+                <a href="{{ url_for('cameras') }}">Início</a>
                 <a href="{{ url_for('config_page') }}">Configurações</a>
                 <a href="{{ url_for('change_password') }}">Alterar senha</a>
                 <form action="{{ url_for('logout') }}" method="post">
@@ -37,7 +37,7 @@
 
     <footer class="footer">
         <div class="container">
-            Central de Câmeras{% if auth_user %} · conectado como {{ auth_user }}{% endif %}
+            LYSec Play{% if auth_user %} · conectado como {{ auth_user }}{% endif %}
         </div>
     </footer>
 

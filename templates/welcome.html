@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="robots" content="noindex, nofollow">
+    <title>Bem-vindo · LYSec Play</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
+</head>
+<body class="auth-body">
+    <main class="auth-shell welcome-shell">
+        <div class="auth-brand welcome-brand">
+            <div class="welcome-mark" aria-hidden="true">📹</div>
+            <div class="logo">LYSec Play</div>
+        </div>
+
+        <section class="auth-card welcome-card">
+            <h1>Seja bem-vindo ao LYSec Play</h1>
+            <p class="lead">
+                Acesse e encontre suas gravações de forma rápida e sem complicação.
+            </p>
+            <a href="{{ url_for('login') }}" class="btn btn-primary btn-block">
+                Acessar o sistema
+            </a>
+        </section>
+
+        <p class="welcome-footnote">Acesso protegido por usuário e senha.</p>
+    </main>
+</body>
+</html>

@@ -1,11 +1,11 @@
 {% extends "base.html" %}
 
-{% block title %}{{ friendly_folder }} · Central de Câmeras{% endblock %}
+{% block title %}{{ friendly_folder }} · LYSec Play{% endblock %}
 
 {% block content %}
 <div class="page-head">
     <div>
-        <p class="subtitle"><a href="{{ url_for('index') }}">← Voltar para as câmeras</a></p>
+        <p class="subtitle"><a href="{{ url_for('cameras') }}">← Voltar para as câmeras</a></p>
         <h1>{{ friendly_folder }}</h1>
         <p class="subtitle">Pasta: <code>{{ folder_name }}</code></p>
     </div>
@@ -33,10 +33,7 @@
 </p>
 
 <div id="codec-note" class="alert alert-info" role="alert" hidden>
-    <strong>Dica:</strong> se a prévia do vídeo não aparecer, o navegador pode
-    não reproduzir este formato. Use os botões <strong>Abrir</strong> ou
-    <strong>Baixar</strong> em cada gravação. O arquivo baixado abre no VLC ou
-    no player do Windows.
+    <strong>Dica:</strong> arquivos em gravação atual só liberarão a prévia após serem finalizados pelo sistema. Se o vídeo for antigo e não reproduzir, utilize os botões <strong>Abrir</strong> ou <strong>Baixar</strong>.
 </div>
 
 {% if videos %}
@@ -50,8 +47,8 @@
                     type="video/mp4">
             </video>
             <div class="video-fallback">
-                <strong>Prévia indisponível neste navegador</strong>
-                <span>Use os botões abaixo para abrir ou baixar o vídeo.</span>
+                <strong>Gravação em andamento ou formato pendente</strong>
+                <span>Se o bloco estiver sendo gravado agora, a prévia estará disponível assim que for finalizado. Caso contrário, use os botões abaixo para abrir ou baixar.</span>
             </div>
         </div>
         <div class="recording-info">
