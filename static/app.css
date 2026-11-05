@@ -379,9 +379,61 @@ input:focus {
     margin: 0;
 }
 
-.camera-card .folder-id {
+.camera-card-head {
+    align-items: flex-start;
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+}
+
+.camera-name {
+    align-items: center;
+    display: flex;
+    gap: 0.45rem;
+    min-width: 0;
+}
+
+.camera-name h2 {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.camera-icon {
     color: var(--muted);
-    font-size: 0.78rem;
+    flex-shrink: 0;
+    height: 1.05rem;
+    transition: color 0.15s;
+    width: 1.05rem;
+}
+
+.camera-card:hover .camera-icon {
+    color: var(--accent);
+}
+
+.badge-status {
+    align-items: center;
+    border: 1px solid transparent;
+    border-radius: 999px;
+    display: inline-flex;
+    font-size: 0.72rem;
+    font-weight: 600;
+    gap: 0.28rem;
+    letter-spacing: 0.02em;
+    line-height: 1.35;
+    padding: 0.16rem 0.55rem;
+}
+
+.badge-online {
+    background: rgba(0, 217, 163, 0.10);
+    border-color: rgba(0, 217, 163, 0.35);
+    color: #9df5dc;
+}
+
+.badge-recording {
+    background: rgba(255, 123, 123, 0.10);
+    border-color: rgba(255, 123, 123, 0.35);
+    color: #ffc4c4;
 }
 
 .rename {

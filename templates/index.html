@@ -52,9 +52,19 @@
 <div class="camera-grid">
     {% for cam in cameras %}
     <div class="camera-card">
-        <div>
-            <h2>{{ cam.friendly_name }}</h2>
-            <div class="folder-id">Pasta: {{ cam.original_name }}</div>
+        <div class="camera-card-head">
+            <div class="camera-name">
+                <svg class="camera-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                     stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"
+                     aria-hidden="true" focusable="false">
+                    <rect x="2" y="6" width="13" height="8" rx="2"></rect>
+                    <path d="m15 9 6-3v10l-6-3"></path>
+                    <path d="M6 14v4"></path>
+                    <path d="M4 20h8"></path>
+                </svg>
+                <h2 title="{{ cam.friendly_name }}">{{ cam.friendly_name }}</h2>
+            </div>
+            <span class="badge-status badge-online">🟢 Online</span>
         </div>
 
         <a href="{{ url_for('view_camera', folder_name=cam.original_name) }}" class="btn btn-primary btn-block">
