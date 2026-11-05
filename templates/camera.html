@@ -1,141 +1,99 @@
-<!DOCTYPE html>
-<html lang="pt-br">
-<head>
-    <meta charset="UTF-8">
-    <title>FEED // {{ friendly_folder }}</title>
-    <link href="{{ url_for('static', filename='vendor/bootstrap/bootstrap.min.css') }}" rel="stylesheet">
-    <link href="{{ url_for('static', filename='vendor/fonts/share-tech-mono.css') }}" rel="stylesheet">
-    <style>
-        body {
-            background-color: #030a0f;
-            color: #00ffcc;
-            font-family: 'Share Tech Mono', monospace;
-            overflow-x: hidden;
-        }
-        body::before {
-            content: " ";
-            display: block;
-            position: fixed;
-            top: 0; left: 0; bottom: 0; right: 0;
-            background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.25) 50%), linear-gradient(90deg, rgba(255, 0, 0, 0.06), rgba(0, 255, 0, 0.02), rgba(0, 0, 255, 0.06));
-            z-index: 99999;
-            background-size: 100% 2px, 3px 100%;
-            pointer-events: none;
-        }
-        h2, h6 {
-            text-shadow: 0 0 8px rgba(0, 255, 204, 0.5);
-            letter-spacing: 1px;
-        }
-        .card-cyber {
-            background-color: #071521 !important;
-            border: 1px solid #00ffcc44;
-            box-shadow: 0 0 10px rgba(0, 255, 204, 0.08);
-        }
-        .btn-cyber-outline {
-            background-color: transparent;
-            border: 1px solid #00ffcc;
-            color: #00ffcc;
-            text-transform: uppercase;
-            letter-spacing: 1px;
-            transition: 0.2s;
-        }
-        .btn-cyber-outline:hover {
-            background-color: #00ffcc;
-            color: #030a0f;
-            box-shadow: 0 0 12px #00ffcc;
-        }
-        .search-cyber {
-            background-color: #071521 !important;
-            border: 1px solid #00ffcc88 !important;
-            color: #00ffcc !important;
-        }
-        .search-cyber:focus {
-            box-shadow: 0 0 12px #00ffcc;
-            border-color: #00ffcc !important;
-        }
-        video {
-            border: 1px solid #00ffcc33;
-        }
-    </style>
-</head>
-<body class="bg-dark text-light">
-    <div class="container mt-4 mb-5">
-        <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-4">
-            <a href="{{ url_for('index') }}" class="btn btn-cyber-outline">← [VOLTAR AO PAINEL PRINCIPAL]</a>
-            {% if auth_enabled %}
-            <form action="{{ url_for('logout') }}" method="POST" class="d-inline">
-                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                <button type="submit" class="btn btn-cyber-outline">⏻ [SAIR]</button>
-            </form>
-            {% endif %}
-        </div>
-        <h2>NODE ACTIVE: {{ friendly_folder }}</h2>
-        <p class="text-muted">ORIGIN_PATH: <code>{{ folder_name }}</code></p>
+{% extends "base.html" %}
 
-        <!-- Barra de Pesquisa por data/hora estilo terminal -->
-        <div class="mb-4">
-            <form method="GET" class="mb-4">
-                <input
-                    type="text"
-                    name="search"
-                    class="form-control search-cyber form-control-lg"
-                    placeholder="> FILTRAR POR TIMESTAMP OU ARQUIVO"
-                    value="{{ search }}"
-                >
-            </form>
-        </div>
+{% block title %}{{ friendly_folder }} · Central de Câmeras{% endblock %}
 
-        <div class="row" id="videoGrid">
-            {% for vid in videos %}
-            <div class="col-md-4 mb-4 video-item" data-search="{{ vid.datetime }} {{ vid.filename }}">
-                <div class="card card-cyber text-light shadow">
-                    <div class="card-body">
-                        <h6 class="card-title text-warning mb-2">⏱ {{ vid.datetime }}</h6>
-                        <!-- Player com metadata ativo e visual hacker -->
-                        <video width="100%" controls preload="metadata" class="rounded mb-2 bg-black">
-                            <source src="{{ url_for('stream_video', folder_name=folder_name, filename=vid.filename) }}" type="video/mp4">
-                            Seu navegador não suporta reprodução de vídeo.
-                        </video>
-                        <p class="small text-white-50 mb-0 text-truncate">> FILE: {{ vid.filename }}</p>
-                    </div>
-                </div>
-            </div>
-            {% endfor %}
-            {% if not videos %}
-            <div class="col-12">
-                <div class="alert bg-dark text-warning border-warning" role="alert">
-                    > NENHUMA GRAVAÇÃO ENCONTRADA{% if search %} PARA "{{ search }}"{% endif %}.
-                    {% if search %}<a href="{{ url_for('view_camera', folder_name=folder_name) }}" class="alert-link text-warning">Limpar filtro</a>{% endif %}
-                </div>
-            </div>
-            {% endif %}
-        </div>
-
-        <!-- Controles de Paginação Cyber -->
-        {% if total_pages > 1 %}
-        <nav class="mt-4">
-            <ul class="pagination justify-content-center">
-                <li class="page-item {% if page <= 1 %}disabled{% endif %}">
-                    <a class="page-link bg-dark text-info border-info" href="{{ url_for('view_camera',
-                    folder_name=folder_name,
-                    page=page-1,
-                    search=search) }}">« ANTERIOR</a>
-                </li>
-                
-                <li class="page-item disabled">
-                    <span class="page-link bg-secondary text-light border-secondary">PÁGINA {{ page }} / {{ total_pages }}</span>
-                </li>
-
-                <li class="page-item {% if page >= total_pages %}disabled{% endif %}">
-                    <a class="page-link bg-dark text-info border-info" href="{{ url_for('view_camera',
-                    folder_name=folder_name,
-                    page=page+1,
-                    search=search) }}">PRÓXIMA »</a>
-                </li>
-            </ul>
-        </nav>
-        {% endif %}
+{% block content %}
+<div class="page-head">
+    <div>
+        <p class="subtitle"><a href="{{ url_for('index') }}">← Voltar para as câmeras</a></p>
+        <h1>{{ friendly_folder }}</h1>
+        <p class="subtitle">Pasta: <code>{{ folder_name }}</code></p>
     </div>
+</div>
 
-</body>
-</html>
+<form method="GET" class="search-bar">
+    <div class="field">
+        <label for="search">Buscar gravação</label>
+        <input
+            type="search"
+            id="search"
+            name="search"
+            value="{{ search }}"
+            placeholder="Digite uma data (04/11/2026) ou parte do nome do arquivo">
+    </div>
+    <button type="submit" class="btn btn-primary">Buscar</button>
+    {% if search %}
+    <a href="{{ url_for('view_camera', folder_name=folder_name) }}" class="btn">Limpar busca</a>
+    {% endif %}
+</form>
+
+<p class="subtitle">
+    {{ total_videos }} gravação(ões) encontrada(s){% if total_pages > 1 %},
+    página {{ page }} de {{ total_pages }}{% endif %}.
+</p>
+
+<div id="codec-note" class="alert alert-info" role="alert" hidden>
+    <strong>Dica:</strong> se a prévia do vídeo não aparecer, o navegador pode
+    não reproduzir este formato. Use os botões <strong>Abrir</strong> ou
+    <strong>Baixar</strong> em cada gravação. O arquivo baixado abre no VLC ou
+    no player do Windows.
+</div>
+
+{% if videos %}
+<div class="recording-grid">
+    {% for vid in videos %}
+    <article class="recording-card">
+        <div class="video-shell">
+            <video controls preload="metadata" playsinline>
+                <source
+                    src="{{ url_for('stream_video', folder_name=folder_name, filename=vid.filename) }}"
+                    type="video/mp4">
+            </video>
+            <div class="video-fallback">
+                <strong>Prévia indisponível neste navegador</strong>
+                <span>Use os botões abaixo para abrir ou baixar o vídeo.</span>
+            </div>
+        </div>
+        <div class="recording-info">
+            <div class="when">{{ vid.datetime }}</div>
+            <div class="file-name" title="{{ vid.filename }}">{{ vid.filename }}</div>
+            <div class="actions">
+                <a
+                    class="btn btn-small"
+                    href="{{ url_for('stream_video', folder_name=folder_name, filename=vid.filename) }}"
+                    target="_blank"
+                    rel="noopener">
+                    ▶ Abrir
+                </a>
+                <a
+                    class="btn btn-small"
+                    href="{{ url_for('download_video', folder_name=folder_name, filename=vid.filename) }}">
+                    ⬇ Baixar
+                </a>
+            </div>
+        </div>
+    </article>
+    {% endfor %}
+</div>
+{% else %}
+<div class="alert alert-info" role="alert">
+    Nenhuma gravação encontrada{% if search %} para "{{ search }}"{% endif %}.
+</div>
+{% endif %}
+
+{% if total_pages > 1 %}
+<nav class="pagination" aria-label="Páginas de gravações">
+    {% if page > 1 %}
+    <a class="btn btn-small" href="{{ url_for('view_camera', folder_name=folder_name, page=page-1, search=search) }}">
+        ← Anterior
+    </a>
+    {% endif %}
+    <span class="current">Página {{ page }} de {{ total_pages }}</span>
+    {% if page < total_pages %}
+    <a class="btn btn-small" href="{{ url_for('view_camera', folder_name=folder_name, page=page+1, search=search) }}">
+        Próxima →
+    </a>
+    {% endif %}
+</nav>
+{% endif %}
+{% endblock %}

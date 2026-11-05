@@ -1,123 +1,112 @@
 # Central de Câmeras — guia rápido
 
-Este pacote já vem com tudo o que precisa para rodar. **Não é necessário instalar Python, Git ou qualquer outro programa.**
+Este pacote já vem pronto. **Não é necessário instalar Python, Git ou qualquer
+outro programa.**
 
-O programa é distribuído como **pasta** (`CentralCameras.exe` + `_internal`), e não como arquivo único. Mantenha os dois juntos.
+O programa é distribuído como **pasta**: mantenha `CentralCameras.exe` (ou
+`CentralCameras` no Linux) junto da pasta `_internal`.
 
-## Windows
+## 1. Abrir o programa
 
-1. Extraia o arquivo `.zip` em uma pasta comum, como `Documentos` ou `Desktop`.
-   - Evite `C:\Program Files`, pois a pasta pode não permitir gravação.
+### Windows
+
+1. Extraia o `.zip` em uma pasta comum, como `Documentos` ou `Desktop`.
 2. Dê dois cliques em `CentralCameras.exe`.
-3. O navegador abrirá sozinho em `http://127.0.0.1:5000`.
-4. Mantenha a janela preta aberta enquanto estiver usando. Para encerrar, pressione `Ctrl+C` ou feche essa janela.
+3. O navegador abre sozinho.
+4. Mantenha a janela preta aberta enquanto estiver usando. Para encerrar, feche
+   essa janela ou pressione `Ctrl+C`.
 
-> Não mova o `CentralCameras.exe` para fora da pasta. Ele precisa da pasta `_internal` ao lado. Se for mover o programa, mova a pasta inteira.
+> Se aparecer “O Windows protegeu o computador”, clique em **Mais informações**
+> → **Executar assim mesmo**.
 
-Se o Windows mostrar um aviso de segurança do SmartScreen:
-
-1. Clique em **Mais informações**.
-2. Clique em **Executar assim mesmo**.
-
-Isso acontece porque o executável não possui assinatura digital paga. O programa é o mesmo do projeto.
-
-## Linux
-
-1. Extraia o `.zip`.
-2. Abra a pasta e permita execução:
-
-   ```bash
-   chmod +x CentralCameras
-   ```
-
-3. Execute com dois cliques ou pelo terminal:
-
-   ```bash
-   ./CentralCameras
-   ```
-
-4. O navegador abre automaticamente. Mantenha o terminal aberto enquanto usa.
-
-## Configurar o login (recomendado)
-
-O programa sai **sem login** por padrão. Para exigir usuário e senha:
-
-1. Abra o Prompt de Comando (Windows) ou terminal (Linux) na pasta do programa.
-2. Rode:
-
-   ```bat
-   CentralCameras.exe set-password
-   ```
-
-   ```bash
-   ./CentralCameras set-password
-   ```
-
-3. Informe o usuário (Enter usa `admin`) e digite a senha duas vezes.
-4. Reinicie o programa. A tela de login aparecerá.
-
-O comando grava `APP_USERNAME` e `APP_PASSWORD_HASH` no arquivo `.env`; a senha não fica em texto puro. Se o login estiver desativado, o painel exibe um aviso amarelo — nunca use `HOST=0.0.0.0` sem login configurado.
-
-> **Windows:** confira se o arquivo se chama exatamente `.env`, e não `.env.txt`. No Explorer, ative **Extensões de nomes de arquivos**.
-
-## Primeiro acesso
-
-1. Abra **⚙ CONFIGURAÇÕES**.
-2. Informe o caminho da pasta onde as câmeras gravam os vídeos.
-3. Ajuste os dias de retenção (mínimo **2 dias**).
-4. Clique em **Salvar Configurações**.
-
-## Limpeza automática
-
-O programa apaga gravações mais antigas que a retenção configurada. A retenção mínima é de **2 dias** e não pode ser reduzida pela interface.
-
-Para conferir o que seria apagado **sem apagar nada**:
-
-```bat
-CentralCameras.exe purge --dry-run
-```
+### Linux
 
 ```bash
-./CentralCameras purge --dry-run
+chmod +x CentralCameras
+./CentralCameras
 ```
 
-Somente arquivos `.mp4` são considerados, e arquivos recém-gravados (menos de 10 minutos) são preservados.
+O navegador abre automaticamente. Mantenha o terminal aberto enquanto usa.
 
-## Onde ficam os arquivos
+## 2. Criar o acesso (primeiro uso)
 
-- `config.json`: configurações do sistema e nomes amigáveis das câmeras.
-- `.env`: login e opções de rede (criado pelo `set-password`).
-- `.secret_key`: chave interna de sessão.
-- `central_cameras.log`: registro de funcionamento e erros.
+Na primeira vez, o navegador mostra a tela **Criar acesso**:
 
-Por padrão, esses arquivos ficam na mesma pasta do executável. Se a pasta não permitir gravação, o programa usa automaticamente uma pasta de dados do usuário e mostra o caminho na janela ao iniciar.
+1. Escolha um usuário (pode deixar `admin`).
+2. Crie uma senha com pelo menos 8 caracteres.
+3. Confirme a senha.
+4. Clique em **Criar acesso e continuar**.
 
-## Acessar de outro computador ou celular
+Essa senha será pedida sempre que alguém abrir o programa. Guarde-a.
 
-Copie `.env.example` para `.env` e ajuste:
+## 3. Configurar a pasta das gravações
 
-```env
-HOST=0.0.0.0
-```
+1. Clique em **Configurações**.
+2. Cole o caminho completo da pasta onde as câmeras salvam os vídeos.
+   - Windows: abra a pasta no Explorador, clique na barra de endereço e copie.
+     Exemplo: `D:\Gravacoes`.
+   - Linux: exemplo `/mnt/hd/gravacoes`.
+3. Escolha por quantos dias as gravações serão guardadas (mínimo 2 dias).
+4. Clique em **Salvar configurações**.
 
-Depois reinicie o programa e acesse pelo IP do computador na rede, por exemplo:
+## 4. Ver as gravações
+
+Na tela inicial, clique em **Ver gravações** na câmera desejada. Você pode:
+
+- assistir à prévia no navegador;
+- clicar em **Abrir** para abrir o vídeo em outra aba;
+- clicar em **Baixar** para salvar o arquivo;
+- buscar por data ou por parte do nome do arquivo.
+
+Se a prévia não aparecer, use **Abrir** ou **Baixar**. Alguns navegadores não
+reproduzem vídeos em H.265/HEVC; o arquivo baixado abre no VLC ou no player do
+Windows.
+
+## Acessar pelo celular ou outro computador
+
+Na tela inicial aparece o endereço de acesso pela rede, por exemplo:
 
 ```text
-http://192.168.0.10:5000
+http://192.168.0.10:5000/
 ```
 
-Use isso somente em uma rede confiável e **com o login configurado**. Pode ser necessário liberar a porta `5000` no firewall do sistema.
+O celular ou outro computador precisa estar na **mesma rede**. O login será
+pedido normalmente.
+
+Se não abrir, libere a porta `5000` no firewall do Windows (rede privada) ou do
+roteador.
+
+## Alterar ou recuperar a senha
+
+- Para trocar a senha: entre no programa e clique em **Alterar senha**.
+- Para recuperar a senha: na tela de login, no **próprio computador**, clique
+  em **Esqueci a senha** e crie uma nova.
+
+A recuperação não funciona por outro aparelho da rede, por segurança.
+
+## Arquivos importantes
+
+| Arquivo | Conteúdo |
+|---|---|
+| `config.json` | Pasta das gravações, dias de retenção e nomes das câmeras. |
+| `auth.json` | Usuário e senha (senha protegida por hash). |
+| `.secret_key` | Chave interna de sessão. |
+| `central_cameras.log` | Registro de funcionamento e erros. |
+
+Se a pasta do programa não permitir gravação, o programa usa automaticamente
+`%APPDATA%\CentralCameras` no Windows.
+
+**Backup:** copie `config.json` e `auth.json` para um lugar seguro.
 
 ## Problemas comuns
 
 - **O navegador não abriu:** abra manualmente `http://127.0.0.1:5000`.
-- **A porta 5000 está em uso:** o programa tenta automaticamente as próximas portas e mostra o endereço correto na janela.
-- **Antivírus bloqueou:** adicione a pasta do programa à lista de exceções. Executáveis feitos com PyInstaller às vezes são sinalizados de forma indevida.
-- **“Uma política de Controle de Aplicativo bloqueou este arquivo” / “Extensão de arquivo perigosa do web”:** o Windows marcou o arquivo como baixado da internet (Smart App Control). Clique com o botão direito no `.zip` → **Propriedades** → **Desbloquear** → **Aplicar** antes de extrair. Se já extraiu, clique com o botão direito em `CentralCameras.exe` → **Propriedades** → **Desbloquear**. Não é necessário executar como administrador.
-- **Esqueci a senha:** rode `CentralCameras.exe set-password` novamente.
-- **Erro ao abrir / “app não encontrado”:** a pasta `_internal` foi separada do `.exe`. Extraia o `.zip` novamente e mantenha a pasta inteira.
-- **Quero atualizar:** substitua o `CentralCameras.exe` **e** a pasta `_internal` juntos. Mantenha `config.json`, `.env` e `.secret_key`.
-
-## Backup
-
-Copie `config.json` e `.env` para um local seguro. Eles guardam as configurações e o acesso ao sistema.
+- **A porta 5000 está ocupada:** o programa usa a próxima porta livre e mostra o
+  endereço correto na janela.
+- **Antivírus bloqueou:** adicione a pasta do programa às exceções.
+- **O Windows bloqueou o arquivo:** botão direito → **Propriedades** →
+  **Desbloquear** → **Aplicar**.
+- **Erro ao abrir:** a pasta `_internal` foi separada do executável. Extraia o
+  `.zip` novamente e mantenha a pasta inteira.
+- **Quero atualizar:** substitua o executável **e** a pasta `_internal` juntos.
+  Mantenha `config.json` e `auth.json`.

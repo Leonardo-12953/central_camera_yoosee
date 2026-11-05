@@ -27,7 +27,7 @@ mkdir -p "$PACKAGE_DIR"
 
 # Copia o pacote onedir completo (binário + _internal).
 cp -a dist/CentralCameras/. "$PACKAGE_DIR/"
-cp LEIA-ME.txt .env.example config.example.json "$PACKAGE_DIR/"
+cp LEIA-ME.txt COMO_USAR.md .env.example config.example.json "$PACKAGE_DIR/"
 chmod +x "$PACKAGE_DIR/CentralCameras"
 
 # Cria o zip preservando as permissões (inclusive +x do executável).

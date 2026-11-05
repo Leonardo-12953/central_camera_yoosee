@@ -1,55 +1,20 @@
 <!DOCTYPE html>
-<html lang="pt-br">
+<html lang="pt-BR">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>{{ code }} // LEO_SEC_OPS</title>
-    <link href="{{ url_for('static', filename='vendor/fonts/share-tech-mono.css') }}" rel="stylesheet">
-    <style>
-        body {
-            background-color: #030a0f;
-            color: #00ffcc;
-            font-family: 'Share Tech Mono', monospace;
-            margin: 0;
-            min-height: 100vh;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-        }
-        .error-box {
-            border: 1px solid #00ffcc66;
-            background-color: #071521;
-            box-shadow: 0 0 25px rgba(0, 255, 204, 0.15);
-            padding: 2rem;
-            max-width: 720px;
-            margin: 1rem;
-        }
-        h1 {
-            color: #ffcc00;
-            letter-spacing: 2px;
-            margin-top: 0;
-        }
-        a {
-            color: #00ffcc;
-            text-decoration: none;
-            border: 1px solid #00ffcc;
-            padding: 0.6rem 1rem;
-            display: inline-block;
-            margin-top: 1rem;
-            text-transform: uppercase;
-            letter-spacing: 1px;
-        }
-        a:hover {
-            background-color: #00ffcc;
-            color: #030a0f;
-        }
-    </style>
+    <meta name="robots" content="noindex, nofollow">
+    <title>Erro {{ code }} · Central de Câmeras</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
 </head>
-<body>
+<body class="auth-body">
     <div class="error-box">
-        <h1>⚡ [ERRO {{ code }}]</h1>
-        <p>> {{ message }}</p>
-        <a href="{{ url_for('index') }}">← Voltar ao painel</a>
+        <div class="code">ERRO {{ code }}</div>
+        <h1>Não foi possível abrir esta página</h1>
+        <p class="subtitle">{{ message }}</p>
+        <div class="actions">
+            <a href="{{ url_for('index') }}" class="btn btn-primary">Voltar ao início</a>
+        </div>
     </div>
 </body>
 </html>

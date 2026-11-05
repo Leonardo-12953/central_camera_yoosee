@@ -4,6 +4,7 @@ import codecs
 import getpass
 import hashlib
 import hmac
+import ipaddress
 import json
 import locale
 import logging
@@ -20,7 +21,7 @@ import threading
 import time
 import webbrowser
 from contextlib import contextmanager
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Any, Callable, Iterator
@@ -342,6 +343,8 @@ app.config.update(
     .lower()
     in {"1", "true", "yes", "on"},
 )
+app.config["NETWORK_URLS"] = []
+app.config["NETWORK_ENABLED"] = False
 
 _trusted_hosts = [
     host.strip()
@@ -351,33 +354,210 @@ _trusted_hosts = [
 if _trusted_hosts:
     app.config["TRUSTED_HOSTS"] = _trusted_hosts
 
-AUTH_USERNAME = os.environ.get("APP_USERNAME", "").strip()
-AUTH_PASSWORD = os.environ.get("APP_PASSWORD", "")
-AUTH_PASSWORD_HASH = os.environ.get("APP_PASSWORD_HASH", "").strip()
-AUTH_ENABLED = bool(AUTH_USERNAME and (AUTH_PASSWORD or AUTH_PASSWORD_HASH))
+# --- Conta de acesso -------------------------------------------------------
+#
+# O login é obrigatório. Na primeira execução, o próprio navegador mostra a
+# tela de criação da conta. A conta fica em auth.json (somente hash da senha).
+# As variáveis APP_USERNAME/APP_PASSWORD do .env continuam aceitas apenas para
+# quem já usava a versão antiga; elas servem de fallback até uma nova senha ser
+# definida pela interface.
+AUTH_FILE = DATA_DIR / "auth.json"
+AUTH_LOCK = threading.RLock()
+AUTH_MIN_PASSWORD_LENGTH = 8
+AUTH_MAX_USERNAME_LENGTH = 64
+AUTH_MAX_PASSWORD_LENGTH = 200
 
-if AUTH_PASSWORD and AUTH_PASSWORD_HASH:
+LEGACY_AUTH_USERNAME = os.environ.get("APP_USERNAME", "").strip()
+LEGACY_AUTH_PASSWORD = os.environ.get("APP_PASSWORD", "")
+LEGACY_AUTH_PASSWORD_HASH = os.environ.get("APP_PASSWORD_HASH", "").strip()
+LEGACY_AUTH_ENABLED = bool(
+    LEGACY_AUTH_USERNAME
+    and (LEGACY_AUTH_PASSWORD or LEGACY_AUTH_PASSWORD_HASH)
+)
+
+if LEGACY_AUTH_PASSWORD and LEGACY_AUTH_PASSWORD_HASH:
     logger.warning(
-        "APP_PASSWORD e APP_PASSWORD_HASH foram definidos; "
-        "o hash será usado e a senha em texto puro será ignorada."
+        "APP_PASSWORD e APP_PASSWORD_HASH foram definidos; o hash será usado."
     )
 
-if bool(AUTH_USERNAME) != bool(AUTH_PASSWORD or AUTH_PASSWORD_HASH):
+if bool(LEGACY_AUTH_USERNAME) != bool(
+    LEGACY_AUTH_PASSWORD or LEGACY_AUTH_PASSWORD_HASH
+):
     logger.warning(
-        "APP_USERNAME e APP_PASSWORD (ou APP_PASSWORD_HASH) precisam ser "
-        "definidos juntos; autenticação desativada."
+        "APP_USERNAME e APP_PASSWORD/APP_PASSWORD_HASH precisam ser definidos "
+        "juntos; as credenciais antigas do .env serão ignoradas."
     )
 
-if not AUTH_ENABLED:
-    logger.warning(
-        "Autenticação desativada: o painel está acessível sem login. "
-        "Defina APP_USERNAME e APP_PASSWORD_HASH (ou APP_PASSWORD) no .env "
-        "para exigir usuário e senha."
+
+def _read_auth_file() -> dict[str, str] | None:
+    """Lê a conta salva em auth.json, ignorando arquivos inválidos."""
+
+    try:
+        if not AUTH_FILE.is_file():
+            return None
+        data = json.loads(_read_text_robust(AUTH_FILE))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        logger.error("Falha ao ler %s: %s", AUTH_FILE, exc)
+        return None
+
+    if not isinstance(data, dict):
+        logger.error("%s não contém um objeto JSON válido.", AUTH_FILE)
+        return None
+
+    username = data.get("username")
+    password_hash = data.get("password_hash")
+
+    if (
+        not isinstance(username, str)
+        or not username.strip()
+        or not isinstance(password_hash, str)
+        or not password_hash.strip()
+    ):
+        logger.error("%s não contém usuário e senha válidos.", AUTH_FILE)
+        return None
+
+    return {
+        "username": username.strip()[:AUTH_MAX_USERNAME_LENGTH],
+        "password_hash": password_hash.strip(),
+    }
+
+
+_auth_record: dict[str, str] | None = _read_auth_file()
+
+
+def _legacy_auth_record() -> dict[str, str] | None:
+    if not LEGACY_AUTH_ENABLED:
+        return None
+    return {
+        "username": LEGACY_AUTH_USERNAME,
+        "password_hash": LEGACY_AUTH_PASSWORD_HASH,
+        "password": LEGACY_AUTH_PASSWORD,
+    }
+
+
+def _current_auth() -> dict[str, str] | None:
+    with AUTH_LOCK:
+        if _auth_record is not None:
+            return dict(_auth_record)
+    return _legacy_auth_record()
+
+
+def auth_is_configured() -> bool:
+    return _current_auth() is not None
+
+
+def _auth_version(record: dict[str, str]) -> str:
+    secret = record.get("password_hash") or record.get("password") or ""
+    return hashlib.sha256(
+        f"{record['username']}\0{secret}".encode("utf-8")
+    ).hexdigest()
+
+
+def _auth_password_matches(record: dict[str, str], password: str) -> bool:
+    stored_hash = record.get("password_hash") or ""
+
+    if stored_hash:
+        try:
+            return check_password_hash(stored_hash, password)
+        except (TypeError, ValueError):
+            logger.error("Hash de senha inválido em %s.", AUTH_FILE)
+            return False
+
+    plain = record.get("password") or ""
+    return bool(plain) and _secure_compare(password, plain)
+
+
+def _validate_new_username(username: str) -> str | None:
+    if len(username) < 3 or len(username) > AUTH_MAX_USERNAME_LENGTH:
+        return (
+            "O usuário deve ter entre 3 e "
+            f"{AUTH_MAX_USERNAME_LENGTH} caracteres."
+        )
+    if any(ord(character) < 32 or ord(character) == 127 for character in username):
+        return "O usuário contém caracteres inválidos."
+    return None
+
+
+def _validate_new_password(password: str) -> str | None:
+    if len(password) < AUTH_MIN_PASSWORD_LENGTH:
+        return (
+            "A senha deve ter pelo menos "
+            f"{AUTH_MIN_PASSWORD_LENGTH} caracteres."
+        )
+    if len(password) > AUTH_MAX_PASSWORD_LENGTH:
+        return "A senha é muito longa."
+    return None
+
+
+def _save_auth(username: str, password: str) -> dict[str, str]:
+    """Grava a conta de forma atômica e atualiza o estado em memória."""
+
+    global _auth_record
+
+    record = {
+        "username": username.strip(),
+        "password_hash": generate_password_hash(password),
+        "updated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+    }
+
+    _write_text_atomic(
+        AUTH_FILE,
+        json.dumps(record, indent=2, ensure_ascii=False) + "\n",
+        0o600,
     )
 
-AUTH_SESSION_VERSION = hashlib.sha256(
-    f"{AUTH_USERNAME}\0{AUTH_PASSWORD_HASH or AUTH_PASSWORD}".encode("utf-8")
-).hexdigest()
+    with AUTH_LOCK:
+        _auth_record = {
+            "username": record["username"],
+            "password_hash": record["password_hash"],
+        }
+        return dict(_auth_record)
+
+
+def _start_session(record: dict[str, str]) -> None:
+    session.clear()
+    session.permanent = True
+    session["_auth_user"] = record["username"]
+    session["_auth_version"] = _auth_version(record)
+    session["_csrf_token"] = secrets.token_urlsafe(32)
+
+
+def _is_local_request() -> bool:
+    """Confirma que a requisição veio do próprio computador.
+
+    Além do IP de origem, verificamos o host usado no navegador. Assim, a
+    recuperação de senha também não fica exposta quando o programa é colocado
+    atrás de um proxy reverso com domínio público.
+    """
+
+    remote = (request.remote_addr or "").strip()
+    if remote.startswith("::ffff:"):
+        remote = remote[7:]
+
+    try:
+        if not ipaddress.ip_address(remote).is_loopback:
+            return False
+    except ValueError:
+        if remote.lower() not in {"localhost", ""}:
+            return False
+
+    host = (request.host or "").strip().lower()
+    if host.startswith("["):
+        host = host.split("]", 1)[0][1:]
+    else:
+        host = host.split(":", 1)[0]
+
+    if host in {"localhost", "127.0.0.1", "::1"}:
+        return True
+
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+
+    return address.is_private or address.is_loopback
+
+
 LOGIN_MAX_ATTEMPTS = _env_int("LOGIN_MAX_ATTEMPTS", 5, minimum=1, maximum=100)
 LOGIN_ATTEMPT_WINDOW_SECONDS = _env_int(
     "LOGIN_ATTEMPT_WINDOW_SECONDS",
@@ -1082,53 +1262,6 @@ def _write_text_atomic(path: Path, text: str, mode: int = 0o600) -> None:
         raise
 
 
-def _env_quote(value: str) -> str:
-    """Formata um valor para o .env, usando aspas só quando necessário."""
-
-    if value and not re.search(r"[\s#'\"]", value) and value == value.strip():
-        return value
-    return "'" + value.replace("'", "") + "'"
-
-
-def _update_env_file(path: Path, updates: dict[str, str | None]) -> None:
-    """Atualiza chaves do .env preservando comentários e outras linhas."""
-
-    lines: list[str] = []
-    if path.is_file():
-        try:
-            lines = _read_text_robust(path).splitlines()
-        except (OSError, UnicodeError):
-            lines = []
-
-    remaining = dict(updates)
-    handled: set[str] = set()
-    output: list[str] = []
-
-    for raw_line in lines:
-        stripped = raw_line.strip()
-        candidate = stripped[7:].lstrip() if stripped.startswith("export ") else stripped
-        key = candidate.split("=", 1)[0].strip() if "=" in candidate else ""
-
-        if key and key in remaining:
-            # Remove também chaves duplicadas, para não sobrar uma senha antiga.
-            if key in handled:
-                continue
-            handled.add(key)
-            value = remaining[key]
-            if value is not None:
-                output.append(f"{key}={value}")
-            continue
-
-        output.append(raw_line)
-
-    for key, value in remaining.items():
-        if key not in handled and value is not None:
-            output.append(f"{key}={value}")
-
-    content = "\n".join(output).strip("\n")
-    _write_text_atomic(path, content + "\n" if content else "")
-
-
 def _safe_next_url(value: Any) -> str | None:
     if not isinstance(value, str):
         return None
@@ -1148,24 +1281,26 @@ def _safe_next_url(value: Any) -> str | None:
     if parsed.scheme or parsed.netloc or not parsed.path.startswith("/"):
         return None
 
-    if parsed.path.rstrip("/") in {"", "/login", "/logout"}:
+    if parsed.path.rstrip("/") in {
+        "",
+        "/login",
+        "/logout",
+        "/setup",
+        "/recover",
+        "/conta/senha",
+    }:
         return None
 
     return candidate[:2048]
 
 
 def _check_credentials(username: str, password: str) -> bool:
-    user_ok = _secure_compare(username, AUTH_USERNAME)
+    record = _current_auth()
+    if record is None:
+        return False
 
-    if AUTH_PASSWORD_HASH:
-        try:
-            password_ok = check_password_hash(AUTH_PASSWORD_HASH, password)
-        except (TypeError, ValueError):
-            logger.error("APP_PASSWORD_HASH inválido; login bloqueado.")
-            password_ok = False
-    else:
-        password_ok = _secure_compare(password, AUTH_PASSWORD)
-
+    user_ok = _secure_compare(username, record["username"])
+    password_ok = _auth_password_matches(record, password)
     return user_ok and password_ok
 
 
@@ -1224,10 +1359,18 @@ def _clear_login_failures(ip: str) -> None:
 
 
 def _is_authenticated() -> bool:
+    record = _current_auth()
+    if record is None:
+        return False
+
+    user = session.get("_auth_user")
+    version = session.get("_auth_version")
+
     return bool(
-        AUTH_ENABLED
-        and session.get("_auth_user") == AUTH_USERNAME
-        and session.get("_auth_version") == AUTH_SESSION_VERSION
+        isinstance(user, str)
+        and isinstance(version, str)
+        and _secure_compare(user, record["username"])
+        and _secure_compare(version, _auth_version(record))
     )
 
 
@@ -1244,16 +1387,26 @@ app.jinja_env.globals["csrf_token"] = get_csrf_token
 
 @app.context_processor
 def inject_auth_state() -> dict[str, Any]:
+    record = _current_auth()
     return {
-        "auth_enabled": AUTH_ENABLED,
-        "auth_user": session.get("_auth_user"),
+        "auth_configured": record is not None,
+        "auth_username": record["username"] if record else "",
+        "auth_user": session.get("_auth_user") if record else None,
+        "auth_local_recovery": _is_local_request(),
+        "network_urls": app.config.get("NETWORK_URLS", []),
+        "network_enabled": app.config.get("NETWORK_ENABLED", False),
     }
 
 
 @app.before_request
 def require_authentication() -> Response | None:
-    if not AUTH_ENABLED or request.endpoint in {"login", "static"}:
+    # A tela de primeiro acesso, a de login e a recuperação local são as
+    # únicas páginas abertas. Todo o resto exige sessão autenticada.
+    if request.endpoint in {"login", "setup", "recover", "static"}:
         return None
+
+    if not auth_is_configured():
+        return redirect(url_for("setup"))
 
     if _is_authenticated():
         return None
@@ -1316,7 +1469,7 @@ def handle_unauthorized(error: Any) -> tuple[str, int]:
 
 @app.errorhandler(403)
 def handle_forbidden(error: Any) -> tuple[str, int]:
-    return _render_error(403, "Acesso negado.")
+    return _render_error(403, getattr(error, "description", "Acesso negado."))
 
 
 @app.errorhandler(404)
@@ -1352,10 +1505,53 @@ def handle_unavailable(error: Any) -> tuple[str, int]:
     return _render_error(503, "Serviço temporariamente indisponível.")
 
 
+@app.route("/setup", methods=["GET", "POST"])
+def setup() -> str | Response:
+    """Cria a conta de acesso no primeiro uso, direto pelo navegador."""
+
+    if auth_is_configured():
+        return redirect(url_for("index") if _is_authenticated() else url_for("login"))
+
+    error_message = None
+    username = "admin"
+
+    if request.method == "POST":
+        username = (request.form.get("username") or "").strip()
+        password = request.form.get("password") or ""
+        confirmation = request.form.get("confirmation") or ""
+
+        error_message = _validate_new_username(username)
+        if error_message is None:
+            error_message = _validate_new_password(password)
+        if error_message is None and not _secure_compare(password, confirmation):
+            error_message = "As senhas não coincidem."
+
+        if error_message is None:
+            record = _save_auth(username, password)
+            _start_session(record)
+            logger.info("Conta de acesso criada para %s.", record["username"])
+            flash(
+                "Conta criada com sucesso. Agora configure a pasta das gravações.",
+                "success",
+            )
+            return redirect(url_for("config_page"))
+
+        return (
+            render_template(
+                "setup.html",
+                error_message=error_message,
+                username=username,
+            ),
+            400,
+        )
+
+    return render_template("setup.html", error_message=None, username=username)
+
+
 @app.route("/login", methods=["GET", "POST"])
 def login() -> str | Response:
-    if not AUTH_ENABLED:
-        return redirect(url_for("index"))
+    if not auth_is_configured():
+        return redirect(url_for("setup"))
 
     next_url = _safe_next_url(request.values.get("next"))
 
@@ -1382,14 +1578,12 @@ def login() -> str | Response:
         password = request.form.get("password") or ""
 
         if _check_credentials(username, password):
-            _clear_login_failures(client_ip)
-            session.clear()
-            session.permanent = True
-            session["_auth_user"] = AUTH_USERNAME
-            session["_auth_version"] = AUTH_SESSION_VERSION
-            session["_csrf_token"] = secrets.token_urlsafe(32)
-            logger.info("Login bem-sucedido de %s.", client_ip)
-            return redirect(next_url or url_for("index"))
+            record = _current_auth()
+            if record is not None:
+                _clear_login_failures(client_ip)
+                _start_session(record)
+                logger.info("Login bem-sucedido de %s.", client_ip)
+                return redirect(next_url or url_for("index"))
 
         _record_login_failure(client_ip)
         logger.warning("Tentativa de login inválida de %s.", client_ip)
@@ -1412,6 +1606,97 @@ def login() -> str | Response:
     )
 
 
+@app.route("/recover", methods=["GET", "POST"])
+def recover() -> str | Response:
+    """Recuperação local de senha, sem precisar usar o terminal.
+
+    Só funciona no próprio computador (loopback). Quem tem acesso físico à
+    máquina já poderia alterar os arquivos do programa; usuários da rede não
+    podem redefinir a senha.
+    """
+
+    if not auth_is_configured():
+        return redirect(url_for("setup"))
+
+    if not _is_local_request():
+        abort(
+            403,
+            description=(
+                "A recuperação de senha só pode ser feita no computador onde "
+                "a Central de Câmeras está rodando."
+            ),
+        )
+
+    record = _current_auth()
+    error_message = None
+
+    if request.method == "POST":
+        password = request.form.get("password") or ""
+        confirmation = request.form.get("confirmation") or ""
+
+        error_message = _validate_new_password(password)
+        if error_message is None and not _secure_compare(password, confirmation):
+            error_message = "As senhas não coincidem."
+
+        if error_message is None and record is not None:
+            record = _save_auth(record["username"], password)
+            _start_session(record)
+            _clear_login_failures(request.remote_addr or "desconhecido")
+            logger.info("Senha redefinida localmente para %s.", record["username"])
+            flash("Senha alterada com sucesso.", "success")
+            return redirect(url_for("index"))
+
+        return (
+            render_template(
+                "recover.html",
+                error_message=error_message,
+                username=record["username"] if record else "",
+            ),
+            400,
+        )
+
+    return render_template(
+        "recover.html",
+        error_message=None,
+        username=record["username"] if record else "",
+    )
+
+
+@app.route("/conta/senha", methods=["GET", "POST"])
+def change_password() -> str | Response:
+    record = _current_auth()
+    if record is None:
+        return redirect(url_for("setup"))
+
+    error_message = None
+
+    if request.method == "POST":
+        current = request.form.get("current_password") or ""
+        password = request.form.get("password") or ""
+        confirmation = request.form.get("confirmation") or ""
+
+        if not _auth_password_matches(record, current):
+            error_message = "A senha atual está incorreta."
+        else:
+            error_message = _validate_new_password(password)
+            if error_message is None and not _secure_compare(password, confirmation):
+                error_message = "As senhas não coincidem."
+
+        if error_message is None:
+            record = _save_auth(record["username"], password)
+            _start_session(record)
+            logger.info("Senha alterada por %s.", record["username"])
+            flash("Senha alterada com sucesso.", "success")
+            return redirect(url_for("index"))
+
+        return (
+            render_template("password.html", error_message=error_message),
+            400,
+        )
+
+    return render_template("password.html", error_message=None)
+
+
 @app.route("/logout", methods=["POST"])
 def logout() -> Response:
     user = session.get("_auth_user")
@@ -1421,7 +1706,7 @@ def logout() -> Response:
         logger.info("Logout de %s.", user)
 
     flash("Sessão encerrada com sucesso.", "success")
-    return redirect(url_for("login") if AUTH_ENABLED else url_for("index"))
+    return redirect(url_for("login"))
 
 
 @app.route("/")
@@ -1532,6 +1817,7 @@ def view_camera(folder_name: str) -> str:
         folder_name=folder_name,
         friendly_folder=aliases.get(folder_name, folder_name),
         videos=videos[start:end],
+        total_videos=total_videos,
         page=page,
         total_pages=total_pages,
         search=search,
@@ -1556,6 +1842,33 @@ def stream_video(folder_name: str, filename: str) -> Response:
             mimetype="video/mp4",
             conditional=True,
             etag=True,
+            max_age=0,
+        )
+    except OSError:
+        abort(404)
+
+
+@app.route("/download/<folder_name>/<filename>")
+def download_video(folder_name: str, filename: str) -> Response:
+    """Baixa o vídeo original, útil quando o navegador não abre o codec."""
+
+    config = load_config()
+    record_root, _ = check_record_root(config["system"]["record_root"])
+    if record_root is None:
+        abort(404)
+
+    try:
+        _, file_path = safe_video_path(record_root, folder_name, filename)
+    except (ValueError, FileNotFoundError, OSError):
+        abort(404)
+
+    try:
+        return send_file(
+            file_path,
+            mimetype="video/mp4",
+            as_attachment=True,
+            download_name=filename,
+            conditional=True,
             max_age=0,
         )
     except OSError:
@@ -1676,6 +1989,63 @@ def _browser_url(host: str, port: int) -> str:
     return f"http://{display_host}:{port}/"
 
 
+def _local_ipv4_addresses() -> list[str]:
+    """Descobre os IPv4 desta máquina na rede local, sem depender de DNS."""
+
+    addresses: set[str] = set()
+
+    # Truque do socket UDP: não envia pacotes, apenas descobre a interface
+    # usada para chegar à internet (funciona mesmo sem internet disponível).
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
+            probe.settimeout(0.5)
+            probe.connect(("8.8.8.8", 80))
+            addresses.add(probe.getsockname()[0])
+    except OSError:
+        pass
+
+    try:
+        for info in socket.getaddrinfo(
+            socket.gethostname(), None, socket.AF_INET, socket.SOCK_STREAM
+        ):
+            addresses.add(info[4][0])
+    except OSError:
+        pass
+
+    valid: list[str] = []
+    for address in addresses:
+        try:
+            parsed = ipaddress.ip_address(address)
+        except ValueError:
+            continue
+        if parsed.version != 4 or parsed.is_loopback or parsed.is_link_local:
+            continue
+        valid.append(str(parsed))
+
+    # IPv4 privados (192.168.x.x, 10.x.x.x, 172.16-31.x.x) primeiro.
+    def sort_key(value: str) -> tuple[int, tuple[int, ...]]:
+        address = ipaddress.ip_address(value)
+        return (0 if address.is_private else 1, tuple(int(part) for part in value.split(".")))
+
+    return sorted(set(valid), key=sort_key)
+
+
+def _network_urls(host: str, port: int) -> list[str]:
+    if host in {"", "0.0.0.0", "::"}:
+        ips = _local_ipv4_addresses()
+    elif host.startswith("127.") or host == "localhost":
+        ips = []
+    else:
+        ips = [host]
+
+    urls: list[str] = []
+    for address in ips:
+        if ":" in address:
+            address = f"[{address}]"
+        urls.append(f"http://{address}:{port}/")
+    return urls
+
+
 def _open_browser(url: str) -> None:
     try:
         webbrowser.open(url)
@@ -1774,25 +2144,32 @@ def _prompt_line(prompt: str, secret: bool = False) -> str:
 
 
 def cmd_set_password() -> int:
-    """Cria/atualiza o .env com usuário e hash de senha, sem exigir Python."""
+    """Recuperação opcional por terminal: cria/atualiza a conta de acesso.
 
-    env_path = DATA_DIR / ".env"
+    O caminho normal é pela tela de primeiro acesso no navegador. Este comando
+    serve apenas como alternativa para quem não consegue abrir a interface.
+    """
 
-    print("=== Configuração de login da Central de Câmeras ===")
-    print(f"Arquivo: {env_path}")
-    print("Pressione Enter para usar o usuário padrão (admin).\n")
+    current = _current_auth()
+    default_user = current["username"] if current else "admin"
 
-    username = _prompt_line("Usuário [admin]: ").strip() or "admin"
-    if not re.fullmatch(r"[^\s=#\"']+", username):
-        print(
-            "Usuário inválido: não use espaços, '=', '#', aspas ou quebras de linha.",
-            file=sys.stderr,
-        )
+    print("=== Configuração de acesso da Central de Câmeras ===")
+    print(f"Arquivo: {AUTH_FILE}")
+    print(f"Pressione Enter para usar o usuário atual ({default_user}).\n")
+
+    username = _prompt_line(f"Usuário [{default_user}]: ").strip() or default_user
+    error = _validate_new_username(username)
+    if error:
+        print(error, file=sys.stderr)
         return 1
 
-    password = _prompt_line("Nova senha (mínimo 8 caracteres): ", secret=True)
-    if len(password) < 8:
-        print("A senha deve ter pelo menos 8 caracteres.", file=sys.stderr)
+    password = _prompt_line(
+        f"Nova senha (mínimo {AUTH_MIN_PASSWORD_LENGTH} caracteres): ",
+        secret=True,
+    )
+    error = _validate_new_password(password)
+    if error:
+        print(error, file=sys.stderr)
         return 1
 
     confirmation = _prompt_line("Confirme a senha: ", secret=True)
@@ -1801,20 +2178,12 @@ def cmd_set_password() -> int:
         return 1
 
     try:
-        _update_env_file(
-            env_path,
-            {
-                "APP_USERNAME": _env_quote(username),
-                "APP_PASSWORD_HASH": _env_quote(generate_password_hash(password)),
-                # Evita manter a senha em texto puro no arquivo.
-                "APP_PASSWORD": None,
-            },
-        )
+        _save_auth(username, password)
     except OSError as exc:
-        print(f"Não foi possível gravar {env_path}: {exc}", file=sys.stderr)
+        print(f"Não foi possível gravar {AUTH_FILE}: {exc}", file=sys.stderr)
         return 1
 
-    print(f"\nLogin configurado com sucesso em {env_path}.")
+    print(f"\nAcesso configurado com sucesso em {AUTH_FILE}.")
     print("Reinicie a Central de Câmeras para aplicar.")
     return 0
 
@@ -1851,10 +2220,8 @@ def main() -> None:
 
         print(generate_password_hash(password))
         print(
-            "\nDefina APP_PASSWORD_HASH com o valor acima "
-            "(e APP_USERNAME com o nome de usuário).\n"
-            "Dica: use o comando 'set-password' para gravar isso no .env "
-            "automaticamente.",
+            "\nUso avançado: defina APP_PASSWORD_HASH (e APP_USERNAME) no .env\n"
+            "ou use o comando 'set-password' para criar a conta diretamente.",
             file=sys.stderr,
         )
         return
@@ -1897,7 +2264,9 @@ def main() -> None:
     if not scheduler_disabled and main_process:
         start_cleanup_scheduler()
 
-    host = os.environ.get("HOST", "127.0.0.1").strip() or "127.0.0.1"
+    # 0.0.0.0 permite abrir o painel pelo celular ou por outro computador da
+    # mesma rede. O login obrigatório protege o acesso.
+    host = os.environ.get("HOST", "0.0.0.0").strip() or "0.0.0.0"
     preferred_port = _env_int("PORT", 5000, minimum=1, maximum=65535)
 
     try:
@@ -1915,6 +2284,9 @@ def main() -> None:
         )
 
     url = _browser_url(host, port)
+    network_urls = _network_urls(host, port)
+    app.config["NETWORK_URLS"] = network_urls
+    app.config["NETWORK_ENABLED"] = bool(network_urls)
     open_browser = os.environ.get("OPEN_BROWSER")
     if open_browser is None:
         open_browser = "1" if FROZEN else "0"
@@ -1930,7 +2302,15 @@ def main() -> None:
             daemon=True,
         ).start()
 
-    logger.info("Painel disponível em %s", url)
+    logger.info("Painel neste computador: %s", url)
+    for network_url in network_urls:
+        logger.info("Painel na rede local: %s", network_url)
+    if not network_urls:
+        logger.info(
+            "Acesso pela rede desativado (HOST=%s). Use HOST=0.0.0.0 para "
+            "abrir pelo celular ou por outro computador.",
+            host,
+        )
     logger.info("Para encerrar, feche esta janela ou pressione Ctrl+C.")
 
     if debug:

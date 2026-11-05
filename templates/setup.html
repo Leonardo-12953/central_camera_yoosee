@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="robots" content="noindex, nofollow">
+    <title>Primeiro acesso · Central de Câmeras</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
+</head>
+<body class="auth-body">
+    <div class="auth-shell">
+        <div class="auth-brand">
+            <div class="logo">📹 Central de Câmeras</div>
+            <p>Primeiro acesso ao sistema</p>
+        </div>
+
+        <div class="auth-card">
+            <h1>Criar acesso</h1>
+            <p class="lead">
+                Escolha o usuário e a senha que serão pedidos sempre que o
+                programa for aberto. Guarde a senha em um lugar seguro.
+            </p>
+
+            {% with messages = get_flashed_messages(with_categories=true) %}
+                {% for category, message in messages %}
+                <div class="alert alert-{{ 'success' if category == 'success' else 'warning' }}" role="alert">
+                    {{ message }}
+                </div>
+                {% endfor %}
+            {% endwith %}
+
+            {% if error_message %}
+            <div class="alert alert-danger" role="alert">{{ error_message }}</div>
+            {% endif %}
+
+            <form method="POST" action="{{ url_for('setup') }}">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+
+                <div class="field">
+                    <label for="username">Usuário</label>
+                    <input
+                        type="text"
+                        id="username"
+                        name="username"
+                        value="{{ username }}"
+                        autocomplete="username"
+                        autocapitalize="none"
+                        spellcheck="false"
+                        minlength="3"
+                        maxlength="64"
+                        required
+                        autofocus>
+                </div>
+
+                <div class="field">
+                    <label for="password">Senha</label>
+                    <input
+                        type="password"
+                        id="password"
+                        name="password"
+                        autocomplete="new-password"
+                        minlength="8"
+                        required>
+                    <span class="hint">Use pelo menos 8 caracteres.</span>
+                </div>
+
+                <div class="field">
+                    <label for="confirmation">Confirme a senha</label>
+                    <input
+                        type="password"
+                        id="confirmation"
+                        name="confirmation"
+                        autocomplete="new-password"
+                        minlength="8"
+                        required>
+                </div>
+
+                <button type="submit" class="btn btn-primary btn-block">
+                    Criar acesso e continuar
+                </button>
+            </form>
+        </div>
+    </div>
+</body>
+</html>

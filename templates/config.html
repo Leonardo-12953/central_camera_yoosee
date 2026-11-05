@@ -1,177 +1,129 @@
-<!DOCTYPE html>
-<html lang="pt-BR">
+{% extends "base.html" %}
 
-<head>
-    <meta charset="UTF-8">
-    <title>Configurações</title>
+{% block title %}Configurações · Central de Câmeras{% endblock %}
 
-    <link href="{{ url_for('static', filename='vendor/bootstrap/bootstrap.min.css') }}" rel="stylesheet">
-    <link href="{{ url_for('static', filename='vendor/fonts/share-tech-mono.css') }}" rel="stylesheet">
-</head>
-
-<body class="bg-dark text-light">
-
-<div class="container mt-5">
-
-    <div class="row justify-content-center">
-
-        <div class="col-md-8">
-
-            <div class="card bg-black border-info text-light">
-
-                <div class="card-body">
-
-                    <div class="d-flex justify-content-between align-items-center mb-4">
-                        <h2 class="mb-0">
-                            ⚙ Configurações do Sistema
-                        </h2>
-                        {% if auth_enabled %}
-                        <form action="{{ url_for('logout') }}" method="POST" class="d-inline">
-                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                            <button type="submit" class="btn btn-outline-danger btn-sm">⏻ Sair</button>
-                        </form>
-                        {% endif %}
-                    </div>
-
-                    {% with messages = get_flashed_messages(with_categories=true) %}
-                        {% if messages %}
-                            {% for category, message in messages %}
-                            <div class="alert bg-dark text-{{ 'danger' if category == 'danger' else 'warning' if category == 'warning' else 'success' }} border-{{ 'danger' if category == 'danger' else 'warning' if category == 'warning' else 'success' }}" role="alert">
-                                {{ message }}
-                            </div>
-                            {% endfor %}
-                        {% endif %}
-                    {% endwith %}
-
-                    {% if error_message %}
-                    <div class="alert bg-dark text-danger border-danger" role="alert">
-                        <strong>⚠ ERRO:</strong> {{ error_message }}
-                    </div>
-                    {% elif record_root_error %}
-                    <div class="alert bg-dark text-warning border-warning" role="alert">
-                        <strong>⚠ GRAVAÇÕES INDISPONÍVEIS:</strong> {{ record_root_error }}
-                    </div>
-                    {% elif record_root_warning %}
-                    <div class="alert bg-dark text-warning border-warning" role="alert">
-                        <strong>⚠ AVISO:</strong> {{ record_root_warning }}
-                    </div>
-                    {% endif %}
-
-                    <form method="POST" action="{{ url_for('config_page') }}" id="configForm">
-                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-
-                        <div class="mb-4">
-
-                            <label class="form-label">
-                                Caminho das Gravações
-                            </label>
-
-                            <input
-                                type="text"
-                                class="form-control"
-                                name="record_root"
-                                value="{{ config.record_root }}"
-                                required>
-
-                        </div>
-
-                        <div class="mb-3">
-
-                            <label class="form-label">
-                                Dias de Retenção
-                            </label>
-
-                            <input
-                                type="number"
-                                class="form-control"
-                                name="retention_days"
-                                id="retention_days"
-                                value="{{ config.retention_days }}"
-                                min="2"
-                                max="3650"
-                                step="1">
-
-                        </div>
-
-                        <div class="alert alert-warning">
-
-                            <strong>Atenção:</strong>
-
-                            Alterar a retenção não apaga vídeos imediatamente.
-
-                            A nova política será aplicada pela rotina automática
-                            do sistema durante as próximas execuções.
-
-                            O mínimo permitido é <strong>2 dias</strong>.
-                            Para conferir o que seria apagado sem remover nada,
-                            use <code>CentralCameras.exe purge --dry-run</code>.
-
-                        </div>
-
-                        <div class="d-flex justify-content-between mt-4">
-
-                            <a href="{{ url_for('index') }}"
-                               class="btn btn-secondary">
-                                ← Voltar
-                            </a>
-
-                            <button type="submit"
-                                    class="btn btn-success">
-                                Salvar Configurações
-                            </button>
-
-                        </div>
-
-                    </form>
-
-                </div>
-
-            </div>
-
-        </div>
-
+{% block content %}
+<div class="page-head">
+    <div>
+        <h1>Configurações</h1>
+        <p class="subtitle">Pasta das gravações e tempo de armazenamento.</p>
     </div>
-
 </div>
 
+{% if error_message %}
+<div class="alert alert-danger" role="alert">{{ error_message }}</div>
+{% elif record_root_error %}
+<div class="alert alert-warning" role="alert">
+    <strong>⚠ Pasta indisponível:</strong> {{ record_root_error }}
+</div>
+{% elif record_root_warning %}
+<div class="alert alert-warning" role="alert">
+    <strong>⚠ Aviso:</strong> {{ record_root_warning }}
+</div>
+{% endif %}
+
+<div class="card section">
+    <h2>Pasta das gravações</h2>
+    <p class="subtitle">
+        É a pasta onde o sistema das câmeras salva os vídeos. No Windows, abra
+        a pasta no Explorador de Arquivos, clique na barra de endereço, copie o
+        caminho e cole aqui.
+    </p>
+
+    <form method="POST" action="{{ url_for('config_page') }}" id="configForm">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+
+        <div class="field">
+            <label for="record_root">Caminho completo da pasta</label>
+            <input
+                type="text"
+                id="record_root"
+                name="record_root"
+                value="{{ config.record_root }}"
+                placeholder="Ex.: D:\Gravacoes  ou  /mnt/hd/gravacoes"
+                required>
+            <span class="hint">
+                Exemplos: <code>D:\Gravacoes</code> no Windows ou
+                <code>/mnt/hd/gravacoes</code> no Linux.
+            </span>
+        </div>
+
+        <div class="field" style="max-width: 260px;">
+            <label for="retention_days">Guardar gravações por quantos dias?</label>
+            <input
+                type="number"
+                id="retention_days"
+                name="retention_days"
+                value="{{ config.retention_days }}"
+                min="2"
+                max="3650"
+                step="1"
+                required>
+            <span class="hint">Mínimo: 2 dias. Máximo: 3650 dias.</span>
+        </div>
+
+        <div class="alert alert-warning">
+            <strong>Atenção:</strong> o programa apaga automaticamente as
+            gravações mais antigas que o número de dias escolhido. Essa limpeza
+            acontece sozinha, em segundo plano.
+        </div>
+
+        <div class="actions">
+            <button type="submit" class="btn btn-primary">Salvar configurações</button>
+            <a href="{{ url_for('index') }}" class="btn">Voltar</a>
+        </div>
+    </form>
+</div>
+
+{% if network_urls %}
+<div class="network-box">
+    <h2>📱 Acesso pela rede</h2>
+    <p class="subtitle">
+        Para abrir no celular ou em outro computador da mesma rede, use:
+    </p>
+    <div class="network-list">
+        {% for url in network_urls %}
+        <a href="{{ url }}">{{ url }}</a>
+        {% endfor %}
+    </div>
+    <p class="hint" style="color: var(--muted); font-size: 0.82rem; margin-top: 0.6rem;">
+        Se outro aparelho não abrir a página, libere a porta no firewall do
+        Windows ou do roteador.
+    </p>
+</div>
+{% endif %}
+
+<div class="card">
+    <h2>Acesso ao sistema</h2>
+    <p class="subtitle">
+        Usuário atual: <strong>{{ auth_username }}</strong>.
+        A senha pode ser trocada a qualquer momento.
+    </p>
+    <div class="actions">
+        <a href="{{ url_for('change_password') }}" class="btn">Alterar senha</a>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
 <script>
+    const retentionInput = document.getElementById("retention_days");
+    const retentionAtual = Number("{{ config.retention_days }}") || 0;
 
-const retentionAtual = parseInt(
-    "{{ config.retention_days }}"
-);
+    document.getElementById("configForm").addEventListener("submit", function (event) {
+        const novoValor = Number(retentionInput.value);
 
-document.getElementById("configForm")
-.addEventListener("submit", function(event) {
+        if (novoValor < retentionAtual) {
+            const confirmar = confirm(
+                "Você reduziu o tempo de armazenamento.\n\n" +
+                "As gravações mais antigas poderão ser apagadas na próxima limpeza automática.\n\n" +
+                "Deseja continuar?"
+            );
 
-    const novoValor = parseInt(
-        document.getElementById("retention_days").value
-    );
-
-    if (novoValor < retentionAtual) {
-
-        const confirmar = confirm(
-
-            "⚠ ATENÇÃO\n\n" +
-
-            "Você reduziu a retenção de vídeos.\n\n" +
-
-            "Vídeos mais antigos poderão ser removidos pela rotina automática do sistema.\n\n" +
-
-            "Deseja continuar?"
-
-        );
-
-        if (!confirmar) {
-
-            event.preventDefault();
-
+            if (!confirmar) {
+                event.preventDefault();
+            }
         }
-
-    }
-
-});
-
+    });
 </script>
-
-</body>
-</html>
+{% endblock %}

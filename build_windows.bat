@@ -32,6 +32,7 @@ xcopy /e /i /y /h "dist\CentralCameras" "dist\CentralCameras-windows" >nul
 if errorlevel 1 goto :error
 
 copy /y LEIA-ME.txt dist\CentralCameras-windows\ >nul
+copy /y COMO_USAR.md dist\CentralCameras-windows\ >nul
 copy /y .env.example dist\CentralCameras-windows\ >nul
 copy /y config.example.json dist\CentralCameras-windows\ >nul
 

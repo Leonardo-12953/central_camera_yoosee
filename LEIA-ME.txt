@@ -4,27 +4,23 @@ CENTRAL DE CAMERAS - GUIA RAPIDO
 Este pacote ja vem pronto. Voce NAO precisa instalar Python, Git ou
 qualquer outro programa.
 
-O pacote e uma PASTA (nao um arquivo unico). Mantenha juntos:
-   CentralCameras.exe
-   _internal\           <- bibliotecas e telas do programa
+O programa e uma PASTA. Mantenha juntos:
+   CentralCameras.exe   (no Linux: CentralCameras)
+   _internal\           (bibliotecas e telas do programa)
    LEIA-ME.txt
-   .env.example
    config.example.json
 
 
 WINDOWS
 -------
-1. Extraia o arquivo .zip em uma pasta comum (Documentos, Desktop, etc.).
+1. Extraia o .zip em uma pasta comum (Documentos, Desktop, etc.).
    Evite "C:\Program Files", pois pode nao permitir gravacao.
 2. De dois cliques em CentralCameras.exe.
-3. O navegador abrira sozinho em http://127.0.0.1:5000
+3. O navegador abre sozinho.
 4. Mantenha a janela preta aberta enquanto estiver usando.
-   Para encerrar, pressione Ctrl+C ou feche a janela.
+   Para encerrar, feche a janela ou pressione Ctrl+C.
 
-Nao separe o .exe da pasta _internal. Se mover o programa, mova a pasta
-inteira.
-
-Se aparecer o aviso "O Windows protegeu o computador":
+Se aparecer "O Windows protegeu o computador":
    clique em "Mais informacoes" e depois em "Executar assim mesmo".
 Isso e normal em programas sem assinatura digital paga.
 
@@ -41,73 +37,62 @@ LINUX
    Mantenha o terminal aberto enquanto usa.
 
 
-CONFIGURAR O LOGIN (RECOMENDADO)
---------------------------------
-O programa sai SEM login por padrao. Para exigir usuario e senha:
+PRIMEIRO ACESSO
+---------------
+Na primeira vez, o navegador mostra a tela "Criar acesso":
 
-1. Abra o terminal/Prompt de Comando na pasta do programa.
-2. Rode:
+1. Escolha um usuario (pode deixar "admin").
+2. Crie uma senha com pelo menos 8 caracteres.
+3. Confirme a senha e clique em "Criar acesso e continuar".
+
+Essa senha sera pedida sempre que alguem abrir o programa.
+Guarde-a em um lugar seguro.
+
+Depois, clique em "Configuracoes" e informe a pasta onde as cameras
+salvam os videos. Escolha os dias de retencao e salve.
+
+O login e OBRIGATORIO. A senha fica protegida por hash no arquivo
+auth.json, nunca em texto puro.
+
+
+ACESSAR PELO CELULAR OU OUTRO COMPUTADOR
+----------------------------------------
+Na tela inicial aparece um quadro com o endereco, por exemplo:
+
+   http://192.168.0.10:5000/
+
+O celular ou outro computador precisa estar na MESMA rede (mesmo
+Wi-Fi ou mesmo roteador). O login sera pedido normalmente.
+
+Se nao abrir em outro aparelho, libere a porta 5000 no firewall do
+Windows (rede privada) ou do roteador.
+
+
+ALTERAR OU RECUPERAR A SENHA
+----------------------------
+- Trocar a senha: entre no programa e clique em "Alterar senha".
+- Esqueceu a senha: na tela de login, no PROPRIO COMPUTADOR, clique
+  em "Esqueci a senha" e crie uma nova.
+
+A recuperacao nao funciona por outro aparelho da rede, por seguranca.
+
+Alternativa avancada pelo terminal:
 
    Windows:  CentralCameras.exe set-password
    Linux:    ./CentralCameras set-password
 
-3. Informe o usuario (Enter usa "admin") e digite a senha duas vezes.
-4. Reinicie o programa. A tela de login aparecera.
-
-O comando grava o usuario e o hash da senha no arquivo .env.
-A senha nao fica em texto puro.
-
-Se o login estiver desativado, o painel mostra um aviso amarelo.
-Nunca use HOST=0.0.0.0 (acesso pela rede) sem login configurado.
-
-Observacao: no Windows, confira se o arquivo se chama ".env" e nao
-".env.txt". No Explorer, ative "Extensoes de nomes de arquivos".
-
-
-PRIMEIRO ACESSO
----------------
-1. Clique em "CONFIGURACOES".
-2. Informe a pasta onde as cameras gravam os videos.
-3. Ajuste os dias de retencao (minimo 2 dias).
-4. Clique em "Salvar Configuracoes".
-
-
-LIMPEZA AUTOMATICA
-------------------
-O programa apaga gravacoes mais antigas que a retencao configurada.
-A retencao minima e de 2 DIAS e nao pode ser reduzida pela interface.
-Para conferir o que seria apagado, SEM apagar nada:
-
-   Windows:  CentralCameras.exe purge --dry-run
-   Linux:    ./CentralCameras purge --dry-run
-
-Somente arquivos .mp4 sao considerados, e arquivos recem-gravados
-(menos de 10 minutos) sao preservados.
-
-
-ACESSAR DE OUTRO COMPUTADOR OU CELULAR
---------------------------------------
-Copie ".env.example" para ".env" e edite:
-
-   HOST=0.0.0.0
-
-Reinicie o programa e acesse pelo IP do computador, por exemplo:
-
-   http://192.168.0.10:5000
-
-Use somente em rede confiavel e com o login configurado.
-
 
 ARQUIVOS IMPORTANTES
 --------------------
-config.json         Configuracoes e nomes das cameras.
-.env                Login e opcoes de rede (criado pelo set-password).
+config.json         Pasta das gravacoes, retencao e nomes das cameras.
+auth.json           Usuario e senha (senha protegida por hash).
 .secret_key         Chave interna de sessao.
 central_cameras.log Registro de funcionamento e erros.
 
 Por padrao ficam na mesma pasta do executavel. Se a pasta nao permitir
-gravacao, o programa usa uma pasta de dados do usuario e mostra o
-caminho na janela ao iniciar.
+gravacao, o programa usa %APPDATA%\CentralCameras (Windows).
+
+BACKUP: copie config.json e auth.json para um lugar seguro.
 
 
 PROBLEMAS COMUNS
@@ -115,19 +100,14 @@ PROBLEMAS COMUNS
 - O navegador nao abriu: abra manualmente http://127.0.0.1:5000
 - Porta 5000 ocupada: o programa tenta as proximas portas e mostra o
   endereco correto na janela.
+- A previa do video nao aparece: algumas cameras gravam em H.265/HEVC,
+  que nem todo navegador reproduz. Clique em "Abrir" ou "Baixar" na
+  gravacao. O arquivo abre no VLC ou no player do Windows.
 - Antivirus bloqueou: adicione a pasta do programa nas excecoes.
 - "Uma politica de Controle de Aplicativo bloqueou este arquivo" ou
-  "Extensao de arquivo perigosa do web": o Windows marcou o arquivo como
-  baixado da internet (Smart App Control). Clique com o botao direito no
-  .zip > Propriedades > Desbloquear > Aplicar antes de extrair. Se ja
-  extraiu, faca o mesmo no CentralCameras.exe. Nao precisa de administrador.
-- Esqueci a senha: rode "CentralCameras.exe set-password" novamente.
-- "app nao encontrado" ou erro ao abrir: a pasta _internal foi separada
-  do .exe. Extraia o zip novamente e mantenha a pasta inteira.
-- Quero atualizar: substitua CentralCameras.exe E a pasta _internal
-  juntos. Mantenha config.json, .env e .secret_key.
-
-
-BACKUP
-------
-Copie config.json e .env para um local seguro.
+  "Extensao de arquivo perigosa do web": clique com o botao direito no
+  .zip > Propriedades > Desbloquear > Aplicar antes de extrair.
+- Erro ao abrir: a pasta _internal foi separada do executavel.
+  Extraia o zip novamente e mantenha a pasta inteira.
+- Quero atualizar: substitua o executavel E a pasta _internal juntos.
+  Mantenha config.json e auth.json.
