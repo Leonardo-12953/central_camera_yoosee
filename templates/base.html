@@ -12,7 +12,8 @@
         <div class="container topbar-inner">
             <a class="brand" href="{{ url_for('cameras') }}">📹 LYSec Play</a>
             <nav class="nav" aria-label="Menu principal">
-                <a href="{{ url_for('cameras') }}">Início</a>
+                <a href="{{ url_for('cameras') }}">Gravações</a>
+                {% if live_viewer_enabled %}<a href="{{ url_for('live_viewer_proxy') }}">Ao vivo</a>{% endif %}
                 <a href="{{ url_for('config_page') }}">Configurações</a>
                 <a href="{{ url_for('change_password') }}">Alterar senha</a>
                 <form action="{{ url_for('logout') }}" method="post">

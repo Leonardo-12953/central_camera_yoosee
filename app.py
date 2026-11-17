@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import atexit
 import codecs
 import getpass
 import hashlib
@@ -13,8 +14,10 @@ import os
 import re
 import secrets
 import shutil
+import signal
 import socket
 import stat
+import subprocess
 import sys
 import tempfile
 import threading
@@ -25,7 +28,9 @@ from datetime import datetime, timedelta, timezone
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Any, Callable, Iterator
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit, urlunsplit
+import urllib.error
+import urllib.request
 
 from flask import (
     Flask,
@@ -578,12 +583,20 @@ app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(
 _login_failures: dict[str, list[float]] = {}
 _login_failures_lock = threading.Lock()
 
+DEFAULT_LIVE_VIEWER_URL = "http://127.0.0.1:8088"
+
 DEFAULT_CONFIG: dict[str, Any] = {
     "system": {
         "record_root": "",
         "retention_days": DEFAULT_RETENTION_DAYS,
     },
     "cameras": {},
+    "live_viewer": {
+        "enabled": True,
+        "base_url": DEFAULT_LIVE_VIEWER_URL,
+        "auto_start": True,
+        "viewer_dir": "",
+    },
 }
 
 DANGEROUS_ROOTS = {
@@ -747,6 +760,28 @@ def _normalize_config(raw: Any) -> dict[str, Any]:
     else:
         logger.warning("Seção 'cameras' inválida; usando objeto vazio.")
 
+    live_raw = raw.get("live_viewer", {})
+    if not isinstance(live_raw, dict):
+        live_raw = {}
+    live_enabled = live_raw.get("enabled", True)
+    if not isinstance(live_enabled, bool):
+        live_enabled = True
+    live_auto_start = live_raw.get("auto_start", True)
+    if not isinstance(live_auto_start, bool):
+        live_auto_start = True
+    live_viewer_dir = live_raw.get("viewer_dir", "")
+    if not isinstance(live_viewer_dir, str):
+        live_viewer_dir = ""
+    live_viewer_dir = live_viewer_dir.strip()
+    live_base = live_raw.get("base_url", DEFAULT_LIVE_VIEWER_URL)
+    if not isinstance(live_base, str) or not live_base.strip():
+        live_base = DEFAULT_LIVE_VIEWER_URL
+    live_base = live_base.strip().rstrip("/")
+    parsed_live = urlsplit(live_base)
+    if parsed_live.scheme not in {"http", "https"} or not parsed_live.netloc:
+        logger.warning("live_viewer.base_url inválido (%r); usando padrão.", live_base)
+        live_base = DEFAULT_LIVE_VIEWER_URL
+
     return {
         "system": {
             "record_root": record_root.strip(),
@@ -755,6 +790,12 @@ def _normalize_config(raw: Any) -> dict[str, Any]:
             ),
         },
         "cameras": cameras,
+        "live_viewer": {
+            "enabled": live_enabled,
+            "base_url": live_base,
+            "auto_start": live_auto_start,
+            "viewer_dir": live_viewer_dir,
+        },
     }
 
 
@@ -1385,9 +1426,21 @@ def get_csrf_token() -> str:
 app.jinja_env.globals["csrf_token"] = get_csrf_token
 
 
+def _live_viewer_settings() -> dict[str, Any]:
+    try:
+        config = load_config()
+        live = config.get("live_viewer") or {}
+    except Exception:  # noqa: BLE001
+        live = {}
+    enabled = bool(live.get("enabled", True))
+    base_url = str(live.get("base_url") or DEFAULT_LIVE_VIEWER_URL).rstrip("/")
+    return {"enabled": enabled, "base_url": base_url}
+
+
 @app.context_processor
 def inject_auth_state() -> dict[str, Any]:
     record = _current_auth()
+    live = _live_viewer_settings()
     return {
         "auth_configured": record is not None,
         "auth_username": record["username"] if record else "",
@@ -1395,6 +1448,7 @@ def inject_auth_state() -> dict[str, Any]:
         "auth_local_recovery": _is_local_request(),
         "network_urls": app.config.get("NETWORK_URLS", []),
         "network_enabled": app.config.get("NETWORK_ENABLED", False),
+        "live_viewer_enabled": live["enabled"],
     }
 
 
@@ -1423,6 +1477,11 @@ def require_authentication() -> Response | None:
 @app.before_request
 def verify_csrf() -> None:
     if request.method not in {"POST", "PUT", "PATCH", "DELETE"}:
+        return
+
+    # Ação encaminhada ao visualizador complementar (ex.: reiniciar stream).
+    # Continua exigindo sessão autenticada; o cookie de sessão é SameSite=Lax.
+    if request.endpoint == "live_viewer_proxy":
         return
 
     expected = session.get("_csrf_token", "")
@@ -1889,50 +1948,119 @@ def download_video(folder_name: str, filename: str) -> Response:
 def config_page() -> str | Response:
     config = load_config()
     system = config["system"]
+    live = config.get("live_viewer") or {
+        "enabled": True,
+        "base_url": DEFAULT_LIVE_VIEWER_URL,
+        "auto_start": True,
+        "viewer_dir": "",
+    }
+
+    def form_config(**overrides: Any) -> dict[str, Any]:
+        values: dict[str, Any] = {
+            "record_root": system["record_root"],
+            "retention_days": system["retention_days"],
+            "live_viewer_enabled": bool(live.get("enabled", True)),
+            "live_viewer_base_url": str(live.get("base_url") or DEFAULT_LIVE_VIEWER_URL),
+            "live_viewer_auto_start": bool(live.get("auto_start", True)),
+            "live_viewer_viewer_dir": str(live.get("viewer_dir") or ""),
+            "live_viewer_detected_dir": str(
+                _find_viewer_dir(str(live.get("viewer_dir") or "")) or ""
+            ),
+        }
+        values.update(overrides)
+        return values
 
     if request.method == "POST":
         raw_root = request.form.get("record_root", "") or ""
         raw_retention = request.form.get("retention_days", "") or ""
+        live_enabled = request.form.get("live_viewer_enabled") == "on"
+        live_auto_start = request.form.get("live_viewer_auto_start") == "on"
+        raw_viewer_dir = (request.form.get("live_viewer_viewer_dir", "") or "").strip()
+        raw_live_url = (request.form.get("live_viewer_base_url", "") or "").strip().rstrip("/")
 
-        try:
-            record_root = validate_record_root(raw_root)
-            retention_days = parse_retention(raw_retention)
-        except ValueError as exc:
+        form_values = {
+            "record_root": raw_root,
+            "retention_days": raw_retention,
+            "live_viewer_enabled": live_enabled,
+            "live_viewer_auto_start": live_auto_start,
+            "live_viewer_base_url": raw_live_url or DEFAULT_LIVE_VIEWER_URL,
+            "live_viewer_viewer_dir": raw_viewer_dir,
+        }
+
+        def render_error(message: str) -> tuple[str, int]:
             return (
                 render_template(
                     "config.html",
-                    config={
-                        "record_root": raw_root,
-                        "retention_days": raw_retention,
-                    },
-                    error_message=str(exc),
+                    config=form_config(**form_values),
+                    error_message=message,
                     record_root_error=None,
                     record_root_warning=None,
                 ),
                 400,
             )
 
+        try:
+            record_root = validate_record_root(raw_root)
+            retention_days = parse_retention(raw_retention)
+        except ValueError as exc:
+            return render_error(str(exc))
+
+        if raw_live_url:
+            parsed_live = urlsplit(raw_live_url)
+            if parsed_live.scheme not in {"http", "https"} or not parsed_live.netloc:
+                return render_error(
+                    "URL do visualizador ao vivo inválida. Use http:// ou https://"
+                )
+        else:
+            raw_live_url = DEFAULT_LIVE_VIEWER_URL
+
+        if raw_viewer_dir:
+            viewer_path = Path(os.path.expanduser(raw_viewer_dir))
+            try:
+                viewer_path = viewer_path.resolve()
+            except OSError:
+                pass
+            if not (viewer_path / "app.py").is_file():
+                return render_error(
+                    "Pasta do Live Viewer inválida: app.py não encontrado em "
+                    f"{viewer_path}."
+                )
+            raw_viewer_dir = str(viewer_path)
+
         def mutate(current: dict[str, Any]) -> None:
             current["system"]["record_root"] = record_root
             current["system"]["retention_days"] = retention_days
+            current.setdefault("live_viewer", {})
+            current["live_viewer"]["enabled"] = live_enabled
+            current["live_viewer"]["base_url"] = raw_live_url
+            current["live_viewer"]["auto_start"] = live_auto_start
+            current["live_viewer"]["viewer_dir"] = raw_viewer_dir
 
         update_config(mutate)
         logger.info(
-            "Configuração atualizada: record_root=%s, retention_days=%s",
+            "Configuração atualizada: record_root=%s, retention_days=%s, "
+            "live_viewer_enabled=%s, live_viewer_auto_start=%s",
             record_root,
             retention_days,
+            live_enabled,
+            live_auto_start,
         )
+        threading.Thread(
+            target=_reconcile_live_viewer,
+            name="live-viewer-reconcile",
+            daemon=True,
+        ).start()
         flash("Configuração salva com sucesso.", "success")
         return redirect(url_for("cameras"))
 
-    record_root, root_error = check_record_root(system["record_root"])
+    record_root_path, root_error = check_record_root(system["record_root"])
     root_warning = None
-    if record_root and not os.access(record_root, os.W_OK):
+    if record_root_path and not os.access(record_root_path, os.W_OK):
         root_warning = "Sem permissão de escrita no diretório de gravações; a limpeza pode falhar."
 
     return render_template(
         "config.html",
-        config=system,
+        config=form_config(),
         record_root_error=root_error,
         record_root_warning=root_warning,
         error_message=None,
@@ -1975,6 +2103,128 @@ def rename_folder() -> Response:
     return redirect(url_for("cameras"))
 
 
+# ---------------------------------------------------------------------------
+# Integração: LYSec Play | Live Viewer (sidecar RTSP->HLS)
+# ---------------------------------------------------------------------------
+
+_LIVE_PROXY_HOP_BY_HOP = {
+    "connection",
+    "keep-alive",
+    "proxy-authenticate",
+    "proxy-authorization",
+    "te",
+    "trailers",
+    "transfer-encoding",
+    "upgrade",
+    "host",
+    "content-length",
+}
+
+
+def _proxy_live_viewer(subpath: str = "") -> Response:
+    live = _live_viewer_settings()
+    if not live["enabled"]:
+        abort(404)
+
+    upstream_base = live["base_url"]
+    path = "/" + subpath.lstrip("/")
+    if subpath == "":
+        path = "/"
+    # Preserva query string
+    qs = request.query_string.decode("utf-8", errors="ignore")
+    upstream_url = upstream_base + path + (("?" + qs) if qs else "")
+
+    data = None
+    if request.method in {"POST", "PUT", "PATCH"}:
+        data = request.get_data(cache=False)
+
+    headers = {}
+    for key, value in request.headers.items():
+        lk = key.lower()
+        if lk in _LIVE_PROXY_HOP_BY_HOP:
+            continue
+        if lk == "accept-encoding":
+            # Evita gzip/br que exigiriam descompressão/re-escrita
+            headers[key] = "identity"
+            continue
+        headers[key] = value
+    headers["X-Forwarded-Prefix"] = "/ao-vivo"
+    headers["X-Forwarded-Host"] = request.host
+    headers["X-Forwarded-Proto"] = request.scheme
+
+    upstream_parsed = urlsplit(upstream_base)
+
+    def rewrite_location(value: str) -> str:
+        value = value.strip()
+        if value.startswith("/"):
+            if value == "/ao-vivo" or value.startswith("/ao-vivo/"):
+                return value
+            return "/ao-vivo" + value
+        parsed = urlsplit(value)
+        if (
+            parsed.scheme == upstream_parsed.scheme
+            and parsed.netloc == upstream_parsed.netloc
+        ):
+            target = "/ao-vivo" + (parsed.path or "/")
+            if parsed.query:
+                target += "?" + parsed.query
+            return target
+        return value
+
+    req = urllib.request.Request(upstream_url, data=data, headers=headers, method=request.method)
+
+    try:
+        upstream = urllib.request.urlopen(req, timeout=60)
+    except urllib.error.HTTPError as exc:
+        body = exc.read() or b""
+        resp = Response(body, status=exc.code)
+        for key, value in exc.headers.items():
+            if key.lower() in _LIVE_PROXY_HOP_BY_HOP:
+                continue
+            if key.lower() == "location":
+                value = rewrite_location(value)
+            resp.headers[key] = value
+        return resp
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        logger.warning("Live viewer indisponível (%s): %s", upstream_url, exc)
+        abort(503, description="Visualizador ao vivo indisponível. Verifique se o LYSec Play | Live Viewer está em execução.")
+
+    status = getattr(upstream, "status", 200)
+
+    def generate():
+        try:
+            while True:
+                chunk = upstream.read(64 * 1024)
+                if not chunk:
+                    break
+                yield chunk
+        finally:
+            try:
+                upstream.close()
+            except Exception:  # noqa: BLE001
+                pass
+
+    passthrough = {}
+    excluded = _LIVE_PROXY_HOP_BY_HOP | {"content-encoding", "content-length"}
+    for key, value in upstream.headers.items():
+        if key.lower() in excluded:
+            continue
+        if key.lower() == "location":
+            value = rewrite_location(value)
+        passthrough[key] = value
+
+    resp = Response(generate(), status=status, headers=passthrough)
+    resp.headers.pop("Content-Length", None)
+    return resp
+
+
+@app.route("/ao-vivo", defaults={"subpath": ""}, methods=["GET", "POST"])
+@app.route("/ao-vivo/", defaults={"subpath": ""}, methods=["GET", "POST"])
+@app.route("/ao-vivo/<path:subpath>", methods=["GET", "POST"])
+def live_viewer_proxy(subpath: str) -> Response:
+    return _proxy_live_viewer(subpath)
+
+
 def _find_available_port(host: str, preferred: int, attempts: int = 20) -> int:
     family = socket.AF_INET6 if ":" in host else socket.AF_INET
 
@@ -1990,6 +2240,388 @@ def _find_available_port(host: str, preferred: int, attempts: int = 20) -> int:
         f"Nenhuma porta livre encontrada entre {preferred} e "
         f"{min(65535, preferred + attempts)}."
     )
+
+
+# ---------------------------------------------------------------------------
+# Supervisor do LYSec Play | Live Viewer (serviço complementar)
+# ---------------------------------------------------------------------------
+
+_LIVE_VIEWER_START_TIMEOUT = 25.0
+_live_viewer_process: subprocess.Popen | None = None
+_live_viewer_log_handle = None
+_live_viewer_control_lock = threading.RLock()
+_live_viewer_watchdog_stop = threading.Event()
+
+
+def _live_viewer_health(base_url: str, timeout: float = 1.0) -> bool:
+    """Verifica se o viewer responde, sem passar por proxies do sistema."""
+    url = base_url.rstrip("/") + "/healthz"
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    try:
+        with opener.open(url, timeout=timeout) as response:
+            return 200 <= getattr(response, "status", 200) < 300
+    except (urllib.error.URLError, TimeoutError, OSError, ValueError):
+        return False
+
+
+def _live_viewer_local_endpoint(base_url: str) -> tuple[str, int] | None:
+    """Retorna (host, porta) quando o viewer pode ser gerenciado localmente."""
+    try:
+        parsed = urlsplit(base_url)
+        port = parsed.port
+    except ValueError:
+        return None
+    if parsed.scheme != "http":
+        if parsed.scheme == "https":
+            logger.warning(
+                "live_viewer.base_url usa https; o início automático local "
+                "não é suportado. Inicie o viewer manualmente."
+            )
+        return None
+    host = (parsed.hostname or "").strip().lower()
+    if host not in {"127.0.0.1", "localhost"}:
+        return None
+    if parsed.path not in {"", "/"}:
+        logger.warning(
+            "live_viewer.base_url tem caminho %r; o início automático local "
+            "não é suportado.",
+            parsed.path,
+        )
+        return None
+    return "127.0.0.1", port or 80
+
+
+def _viewer_dir_candidates(configured: str = "") -> list[Path]:
+    candidates: list[Path] = []
+    if configured:
+        candidates.append(Path(os.path.expanduser(configured)))
+    env_dir = os.environ.get("LIVE_VIEWER_DIR", "").strip()
+    if env_dir:
+        candidates.append(Path(os.path.expanduser(env_dir)))
+    candidates.extend(
+        [
+            APP_DIR / "live_viewer",
+            APP_DIR.parent / "yoosee_viewer",
+            Path.cwd() / "yoosee_viewer",
+        ]
+    )
+
+    unique: list[Path] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        try:
+            resolved = candidate.resolve()
+        except OSError:
+            continue
+        key = str(resolved)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(resolved)
+    return unique
+
+
+def _find_viewer_dir(configured: str = "") -> Path | None:
+    if configured:
+        try:
+            candidate = Path(os.path.expanduser(configured)).resolve()
+        except OSError:
+            candidate = Path(os.path.expanduser(configured))
+        if (candidate / "app.py").is_file() and (candidate / "config.json").is_file():
+            return candidate
+        return None
+
+    for candidate in _viewer_dir_candidates():
+        if (candidate / "app.py").is_file() and (candidate / "config.json").is_file():
+            return candidate
+    return None
+
+
+def _viewer_python() -> str | None:
+    override = os.environ.get("LIVE_VIEWER_PYTHON", "").strip()
+    if override:
+        return override
+    if not FROZEN:
+        return sys.executable
+    return shutil.which("python3") or shutil.which("python")
+
+
+def _open_viewer_log(viewer_dir: Path):
+    logs_dir = viewer_dir / "logs"
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    log_path = logs_dir / "central_sidecar.log"
+    fd = os.open(log_path, os.O_CREAT | os.O_WRONLY | os.O_APPEND, 0o600)
+    return log_path, os.fdopen(fd, "ab", buffering=0)
+
+
+def _terminate_live_viewer_process(proc: subprocess.Popen) -> None:
+    if proc.poll() is not None:
+        return
+    logger.info("Encerrando LYSec Play | Live Viewer (pid=%s)...", proc.pid)
+    try:
+        if os.name == "posix":
+            os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+        else:
+            proc.terminate()
+    except (ProcessLookupError, OSError):
+        return
+
+    try:
+        proc.wait(timeout=10)
+        return
+    except subprocess.TimeoutExpired:
+        pass
+
+    logger.warning("Live Viewer não encerrou em 10s; forçando encerramento.")
+    try:
+        if os.name == "posix":
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        else:
+            proc.kill()
+    except (ProcessLookupError, OSError):
+        pass
+    try:
+        proc.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        pass
+
+
+def _stop_live_viewer() -> None:
+    global _live_viewer_process, _live_viewer_log_handle
+
+    with _live_viewer_control_lock:
+        proc = _live_viewer_process
+        _live_viewer_process = None
+        if proc is not None:
+            _terminate_live_viewer_process(proc)
+        if _live_viewer_log_handle is not None:
+            try:
+                _live_viewer_log_handle.close()
+            except OSError:
+                pass
+            _live_viewer_log_handle = None
+
+
+def _ensure_live_viewer() -> bool:
+    """Sobe o viewer local quando necessário; True se ele estiver saudável."""
+    global _live_viewer_process, _live_viewer_log_handle
+
+    if os.environ.get("DISABLE_LIVE_VIEWER_AUTOSTART", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }:
+        logger.info(
+            "Início automático do Live Viewer desativado por variável de ambiente."
+        )
+        return False
+
+    live = load_config().get("live_viewer") or {}
+    if not live.get("enabled", True) or not live.get("auto_start", True):
+        return False
+
+    base_url = str(live.get("base_url") or DEFAULT_LIVE_VIEWER_URL)
+    if _live_viewer_health(base_url):
+        logger.info("LYSec Play | Live Viewer já está em execução em %s.", base_url)
+        return True
+
+    endpoint = _live_viewer_local_endpoint(base_url)
+    if endpoint is None:
+        logger.warning(
+            "Live Viewer configurado em %s não é um serviço local gerenciável; "
+            "inicie-o manualmente.",
+            base_url,
+        )
+        return False
+
+    viewer_dir = _find_viewer_dir(str(live.get("viewer_dir") or ""))
+    if viewer_dir is None:
+        logger.warning(
+            "Pasta do Live Viewer não encontrada. Defina live_viewer.viewer_dir, "
+            "a variável LIVE_VIEWER_DIR ou mantenha o projeto ao lado do Central "
+            "(%s).",
+            APP_DIR.parent / "yoosee_viewer",
+        )
+        return False
+
+    python = _viewer_python()
+    if not python:
+        logger.warning(
+            "Não encontrei um interpretador Python para iniciar o Live Viewer. "
+            "Defina LIVE_VIEWER_PYTHON."
+        )
+        return False
+
+    host, port = endpoint
+    try:
+        log_path, log_handle = _open_viewer_log(viewer_dir)
+    except OSError as exc:
+        logger.warning("Não foi possível abrir o log do Live Viewer: %s", exc)
+        return False
+
+    command = [
+        python,
+        str(viewer_dir / "app.py"),
+        "--config",
+        str(viewer_dir / "config.json"),
+        "--secrets",
+        str(viewer_dir / "secrets.json"),
+        "--host",
+        host,
+        "--port",
+        str(port),
+    ]
+    env = os.environ.copy()
+    env["PYTHONUNBUFFERED"] = "1"
+    env["LIVE_VIEWER_PARENT_PID"] = str(os.getpid())
+    kwargs: dict[str, Any] = {
+        "cwd": str(viewer_dir),
+        "stdin": subprocess.DEVNULL,
+        "stdout": log_handle,
+        "stderr": subprocess.STDOUT,
+        "env": env,
+    }
+    if os.name == "posix":
+        kwargs["start_new_session"] = True
+    else:
+        kwargs["creationflags"] = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+
+    with _live_viewer_control_lock:
+        current = _live_viewer_process
+        if current is not None and current.poll() is None:
+            log_handle.close()
+            return _live_viewer_health(base_url)
+        try:
+            proc = subprocess.Popen(command, **kwargs)
+        except OSError as exc:
+            log_handle.close()
+            logger.warning("Não foi possível iniciar o Live Viewer: %s", exc)
+            return False
+        _live_viewer_process = proc
+        _live_viewer_log_handle = log_handle
+
+    logger.info(
+        "LYSec Play | Live Viewer iniciado automaticamente (pid=%s): %s",
+        proc.pid,
+        base_url,
+    )
+
+    deadline = time.monotonic() + _LIVE_VIEWER_START_TIMEOUT
+    while time.monotonic() < deadline:
+        if proc.poll() is not None:
+            logger.warning(
+                "Live Viewer encerrou durante a inicialização (código %s). "
+                "Consulte %s.",
+                proc.returncode,
+                log_path,
+            )
+            _stop_live_viewer()
+            return False
+        if _live_viewer_health(base_url, timeout=0.8):
+            logger.info("Live Viewer pronto em %s.", base_url)
+            return True
+        time.sleep(0.4)
+
+    logger.warning(
+        "Live Viewer ainda não respondeu após %.0fs; o Central continuará "
+        "funcionando. Consulte %s.",
+        _LIVE_VIEWER_START_TIMEOUT,
+        log_path,
+    )
+    return False
+
+
+def _reconcile_live_viewer() -> None:
+    """Aplica mudanças de configuração do viewer sem reiniciar o Central."""
+    with _live_viewer_control_lock:
+        try:
+            live = load_config().get("live_viewer") or {}
+        except Exception:  # noqa: BLE001
+            logger.exception("Falha ao recarregar a configuração do Live Viewer.")
+            return
+
+        if not live.get("enabled", True) or not live.get("auto_start", True):
+            _stop_live_viewer()
+            return
+
+        base_url = str(live.get("base_url") or DEFAULT_LIVE_VIEWER_URL)
+        if _live_viewer_health(base_url):
+            return
+
+        current = _live_viewer_process
+        if current is not None and current.poll() is None:
+            _stop_live_viewer()
+        _ensure_live_viewer()
+
+
+def _live_viewer_watchdog() -> None:
+    """Recoloca o viewer no ar se ele cair (com intervalo mínimo entre tentativas)."""
+    next_attempt = 0.0
+    while not _live_viewer_watchdog_stop.wait(5.0):
+        try:
+            live = load_config().get("live_viewer") or {}
+        except Exception:  # noqa: BLE001
+            continue
+        if not live.get("enabled", True) or not live.get("auto_start", True):
+            continue
+        base_url = str(live.get("base_url") or DEFAULT_LIVE_VIEWER_URL)
+        if _live_viewer_local_endpoint(base_url) is None:
+            continue
+        if _live_viewer_health(base_url, timeout=1.0):
+            continue
+        now = time.monotonic()
+        if now < next_attempt:
+            continue
+        next_attempt = now + 15.0
+        logger.warning("Live Viewer não respondeu; tentando reiniciar.")
+        _reconcile_live_viewer()
+
+
+def _run_waitress(application, host: str, port: int) -> None:
+    """Serve com Waitress e encerra o sidecar também em SIGINT/SIGTERM."""
+    from waitress import create_server
+
+    server = create_server(
+        application,
+        host=host,
+        port=port,
+        threads=_env_int("SERVER_THREADS", 8, minimum=2, maximum=64),
+        ident="CentralCameras",
+    )
+    closing = threading.Event()
+    installed: dict[int, Any] = {}
+
+    def shutdown(signum, _frame) -> None:
+        if closing.is_set():
+            raise KeyboardInterrupt
+        closing.set()
+        logger.info("Recebido sinal %s; encerrando o Central...", signum)
+        # O sinal chega na thread principal, que está dentro de server.run().
+        # Waitress trata KeyboardInterrupt e encerra o loop com segurança.
+        raise KeyboardInterrupt
+
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        try:
+            installed[sig] = signal.signal(sig, shutdown)
+        except (ValueError, OSError):
+            pass
+
+    try:
+        server.run()
+    finally:
+        try:
+            server.close()
+        except Exception:  # noqa: BLE001
+            pass
+        for sig, previous in installed.items():
+            try:
+                signal.signal(sig, previous or signal.SIG_DFL)
+            except (ValueError, OSError):
+                pass
+
+
+atexit.register(_stop_live_viewer)
 
 
 def _browser_url(host: str, port: int) -> str:
@@ -2270,6 +2902,16 @@ def main() -> None:
 
     if main_process:
         ensure_config_file()
+        try:
+            _ensure_live_viewer()
+        except Exception:  # noqa: BLE001 - o Central nunca deve cair por causa do sidecar
+            logger.exception("Falha no início automático do LYSec Play | Live Viewer.")
+        _live_viewer_watchdog_stop.clear()
+        threading.Thread(
+            target=_live_viewer_watchdog,
+            name="live-viewer-watchdog",
+            daemon=True,
+        ).start()
 
     if not scheduler_disabled and main_process:
         start_cleanup_scheduler()
@@ -2323,38 +2965,36 @@ def main() -> None:
         )
     logger.info("Para encerrar, feche esta janela ou pressione Ctrl+C.")
 
-    if debug:
-        app.run(
-            host=host,
-            port=port,
-            debug=True,
-            use_reloader=True,
-            threaded=True,
-        )
-        return
-
     try:
-        from waitress import serve
-    except ImportError:
-        logger.warning(
-            "Waitress não está instalado; usando o servidor embutido do Flask."
-        )
-        app.run(
-            host=host,
-            port=port,
-            debug=False,
-            use_reloader=False,
-            threaded=True,
-        )
-        return
+        if debug:
+            app.run(
+                host=host,
+                port=port,
+                debug=True,
+                use_reloader=True,
+                threaded=True,
+            )
+            return
 
-    serve(
-        app,
-        host=host,
-        port=port,
-        threads=_env_int("SERVER_THREADS", 8, minimum=2, maximum=64),
-        ident="CentralCameras",
-    )
+        try:
+            from waitress import create_server  # noqa: F401
+        except ImportError:
+            logger.warning(
+                "Waitress não está instalado; usando o servidor embutido do Flask."
+            )
+            app.run(
+                host=host,
+                port=port,
+                debug=False,
+                use_reloader=False,
+                threaded=True,
+            )
+            return
+
+        _run_waitress(app, host, port)
+    finally:
+        _live_viewer_watchdog_stop.set()
+        _stop_live_viewer()
 
 
 if __name__ == "__main__":

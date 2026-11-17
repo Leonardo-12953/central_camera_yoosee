@@ -3,5 +3,11 @@
         "record_root": "",
         "retention_days": 7
     },
-    "cameras": {}
+    "cameras": {},
+    "live_viewer": {
+        "enabled": true,
+        "base_url": "http://127.0.0.1:8088",
+        "auto_start": true,
+        "viewer_dir": ""
+    }
 }

@@ -68,6 +68,58 @@
             acontece sozinha, em segundo plano.
         </div>
 
+        <hr style="margin:1.2rem 0; border:none; border-top:1px solid var(--border, #2a3441);">
+        <h2>Visualização ao vivo (LYSec Play | Live Viewer)</h2>
+        <p class="subtitle">
+            Integração com o visualizador RTSP → HLS (serviço complementar). O Central Cameras faz o acesso autenticado ao serviço.
+        </p>
+        <div class="field">
+            <label>
+                <input type="checkbox" name="live_viewer_enabled" {% if config.live_viewer_enabled %}checked{% endif %}>
+                Habilitar aba “Ao vivo”
+            </label>
+        </div>
+        <div class="field">
+            <label for="live_viewer_base_url">URL do serviço ao vivo</label>
+            <input
+                type="text"
+                id="live_viewer_base_url"
+                name="live_viewer_base_url"
+                value="{{ config.live_viewer_base_url or 'http://127.0.0.1:8088' }}"
+                placeholder="http://127.0.0.1:8088">
+            <span class="hint">Padrão: <code>http://127.0.0.1:8088</code>.</span>
+        </div>
+
+        <div class="field">
+            <label>
+                <input type="checkbox" name="live_viewer_auto_start" {% if config.live_viewer_auto_start %}checked{% endif %}>
+                Iniciar o visualizador automaticamente junto com o Central
+            </label>
+            <span class="hint">
+                Se o serviço já estiver em execução, o Central apenas se conecta a ele.
+                Ao fechar o Central, o visualizador iniciado por ele também é encerrado.
+            </span>
+        </div>
+
+        <div class="field">
+            <label for="live_viewer_viewer_dir">Pasta do Live Viewer (opcional)</label>
+            <input
+                type="text"
+                id="live_viewer_viewer_dir"
+                name="live_viewer_viewer_dir"
+                value="{{ config.live_viewer_viewer_dir }}"
+                placeholder="{{ config.live_viewer_detected_dir or '/caminho/para/yoosee_viewer' }}">
+            <span class="hint">
+                Deixe vazio para detectar automaticamente
+                {% if config.live_viewer_detected_dir %}
+                (<code>{{ config.live_viewer_detected_dir }}</code>)
+                {% else %}
+                (procura por <code>live_viewer</code> ou <code>yoosee_viewer</code> ao lado do Central)
+                {% endif %}.
+                A pasta precisa conter <code>app.py</code> e <code>config.json</code>.
+            </span>
+        </div>
+
         <div class="actions">
             <button type="submit" class="btn btn-primary">Salvar configurações</button>
             <a href="{{ url_for('cameras') }}" class="btn">Voltar</a>

@@ -64,6 +64,27 @@ O programa já fica disponível na rede local. Use o endereço mostrado na tela
 inicial — algo como `http://192.168.0.10:5000/` — em um aparelho conectado à
 mesma rede. Se não abrir, libere a porta `5000` no firewall.
 
+## Visualização ao vivo (LYSec Play | Live Viewer)
+
+O painel inclui a aba **Ao vivo**, servida pelo projeto complementar
+`yoosee_viewer` (RTSP → HLS). Basta iniciar o Central: ele detecta a pasta do
+viewer, sobe o serviço automaticamente em `http://127.0.0.1:8088` e o encerra
+junto com o Central.
+
+- A pasta do viewer é procurada automaticamente ao lado do Central
+  (`yoosee_viewer/` ou `live_viewer/`). Também pode ser definida em
+  **Configurações → Pasta do Live Viewer** ou pela variável `LIVE_VIEWER_DIR`.
+- Se o viewer já estiver em execução, o Central apenas se conecta a ele e não
+  interfere no processo existente.
+- Para usar um viewer em outra máquina, desmarque o início automático e ajuste
+  a URL do serviço nas configurações.
+- O log do processo iniciado pelo Central fica em
+  `yoosee_viewer/logs/central_sidecar.log`.
+
+> No modo executável empacotado, o início automático ainda depende de um Python
+> disponível no sistema. O empacotamento do viewer junto ao Central está previsto
+> como etapa seguinte.
+
 ## Rodar a partir do código
 
 ```bash
