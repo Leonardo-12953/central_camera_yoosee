@@ -22,6 +22,8 @@ from ffmpeg_manager import FFmpegProcess, cleanup_stale_pidfile
 
 ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 
+RESTART_REASON = "Reinício solicitado pela interface"
+
 
 class ConfigError(RuntimeError):
     pass
@@ -284,6 +286,10 @@ class CameraRuntime:
         self.last_error = ""
         self.last_error_at: float | None = None
         self.restarts = 0
+        # Pedidos de reinício são numerados: um clique só pode ser consumido
+        # uma vez, mesmo se chegar enquanto a câmera ainda está conectando.
+        self.restart_seq = 0
+        self.handled_restart_seq = 0
         self.started_at: float | None = None
         self.connected_since: float | None = None
         self.total_connected_seconds = 0.0
@@ -293,7 +299,6 @@ class CameraRuntime:
         self.detected_fps: str | None = None
         self.updated_at = time.time()
         self.lock = threading.Lock()
-        self.wake = threading.Event()
         self.thread: threading.Thread | None = None
 
     def set_state(self, state: str, message: str) -> None:
@@ -456,6 +461,7 @@ class CameraManager:
         self.stop_event = threading.Event()
         self.runtimes: dict[str, CameraRuntime] = {}
         self._runtimes_lock = threading.RLock()
+        self._restart_lock = threading.Lock()
 
         streams_root = base_dir / "streams"
         streams_root.mkdir(parents=True, exist_ok=True)
@@ -528,8 +534,6 @@ class CameraManager:
         with self._runtimes_lock:
             runtimes = list(self.runtimes.values())
         for runtime in runtimes:
-            runtime.wake.set()
-        for runtime in runtimes:
             if runtime.thread is not None:
                 runtime.thread.join(timeout=15)
         for runtime in runtimes:
@@ -545,10 +549,11 @@ class CameraManager:
     def request_restart(self, camera_id: str) -> bool:
         with self._runtimes_lock:
             runtime = self.runtimes.get(camera_id)
-        if runtime is None:
-            return False
-        runtime.wake.set()
-        runtime.set_state("reconnecting", "Reinício solicitado pela interface")
+            if runtime is None:
+                return False
+            with self._restart_lock:
+                runtime.restart_seq += 1
+        runtime.set_state("reconnecting", RESTART_REASON)
         return True
 
     def snapshot(self) -> list[dict]:
@@ -557,10 +562,26 @@ class CameraManager:
         return [runtime.snapshot() for runtime in runtimes]
 
     # ------------------------------------------------------------- internals
-    def _sleep(self, seconds: float) -> None:
+    def _consume_restart(self, runtime: CameraRuntime) -> bool:
+        """Consome um pedido de reinício pendente, no máximo uma vez por clique."""
+        with self._restart_lock:
+            if runtime.restart_seq <= runtime.handled_restart_seq:
+                return False
+            runtime.handled_restart_seq = runtime.restart_seq
+        runtime.inc_restarts()
+        return True
+
+    def _sleep(self, seconds: float, runtime: CameraRuntime | None = None) -> bool:
+        """Dorme, mas acorda antes se um reinício for solicitado.
+
+        Devolve True quando o pedido foi consumido (o chamador deve reiniciar).
+        """
         end = time.time() + seconds
         while time.time() < end and not self.stop_event.is_set():
+            if runtime is not None and self._consume_restart(runtime):
+                return True
             time.sleep(0.2)
+        return False
 
     def _reachable(self, spec: CameraSpec) -> bool:
         try:
@@ -573,10 +594,14 @@ class CameraManager:
         spec = runtime.spec
         backoff = 1.0
         while not self.stop_event.is_set():
+            # Reconhece cliques que chegaram antes de existir stream ativo.
+            if self._consume_restart(runtime):
+                runtime.set_state("reconnecting", RESTART_REASON)
+                continue
             if not spec.enabled:
                 runtime.note_disconnected()
                 runtime.set_state("disabled", "Câmera desativada na configuração")
-                self._sleep(3)
+                self._sleep(3, runtime)
                 continue
 
             if not self._reachable(spec):
@@ -585,7 +610,7 @@ class CameraManager:
                     "unreachable",
                     f"Câmera inacessível em {spec.host}:{spec.port}. Tentando novamente…",
                 )
-                self._sleep(min(backoff, 10) + random.uniform(0, 0.4))
+                self._sleep(min(backoff, 10) + random.uniform(0, 0.4), runtime)
                 backoff = min(backoff * 2, 30)
                 continue
 
@@ -603,28 +628,26 @@ class CameraManager:
                 runtime.set_error(f"Falha ao iniciar FFmpeg: {exc}")
                 runtime.set_state("error", "Falha ao iniciar FFmpeg")
                 runtime.clear_proc()
-                self._sleep(backoff + random.uniform(0, 0.4))
+                self._sleep(backoff + random.uniform(0, 0.4), runtime)
                 backoff = min(backoff * 2, 30)
                 continue
 
-            ready = self._wait_for_playlist(runtime, proc)
+            wait_reason = self._wait_for_playlist(runtime, proc)
             if self.stop_event.is_set():
                 runtime.note_disconnected()
                 proc.stop()
                 runtime.clear_proc()
                 break
-            if not ready:
-                reason = "FFmpeg não gerou playlist HLS no tempo esperado"
-                rc = proc.poll()
-                if rc is not None:
-                    reason = f"FFmpeg encerrou durante a inicialização (código {rc})"
+            if wait_reason is not None:
+                reason = wait_reason
                 runtime.set_error(reason)
                 runtime.set_state("reconnecting", reason)
                 runtime.note_disconnected()
                 proc.stop()
                 runtime.clear_proc()
-                runtime.inc_restarts()
-                self._sleep(backoff + random.uniform(0, 0.4))
+                if reason != RESTART_REASON:
+                    runtime.inc_restarts()
+                self._sleep(backoff + random.uniform(0, 0.4), runtime)
                 backoff = min(backoff * 2, 30)
                 continue
 
@@ -635,9 +658,8 @@ class CameraManager:
             last_reach_check = time.time()
 
             while not self.stop_event.is_set():
-                if runtime.wake.is_set():
-                    runtime.wake.clear()
-                    reason = "Reinício solicitado pela interface"
+                if self._consume_restart(runtime):
+                    reason = RESTART_REASON
                     break
                 rc = proc.poll()
                 if rc is not None:
@@ -678,7 +700,9 @@ class CameraManager:
                         break
                 if now - stable_since > 30:
                     backoff = 1.0
-                self._sleep(1)
+                if self._sleep(1, runtime):
+                    reason = RESTART_REASON
+                    break
 
             if self.stop_event.is_set():
                 runtime.note_disconnected()
@@ -691,17 +715,23 @@ class CameraManager:
             runtime.note_disconnected()
             proc.stop()
             runtime.clear_proc()
-            runtime.inc_restarts()
-            self._sleep(backoff + random.uniform(0, 0.4))
+            if reason != RESTART_REASON:
+                runtime.inc_restarts()
+            self._sleep(backoff + random.uniform(0, 0.4), runtime)
             backoff = min(backoff * 2, 30)
 
-    def _wait_for_playlist(self, runtime: CameraRuntime, proc: FFmpegProcess) -> bool:
+    def _wait_for_playlist(self, runtime: CameraRuntime, proc: FFmpegProcess) -> str | None:
+        """None = playlist pronta; string = motivo pelo qual não ficou pronta."""
         deadline = time.time() + self.hls_cfg.start_grace_seconds
         while time.time() < deadline and not self.stop_event.is_set():
-            if proc.poll() is not None:
-                return False
+            if self._consume_restart(runtime):
+                return RESTART_REASON
+            rc = proc.poll()
+            if rc is not None:
+                return f"FFmpeg encerrou durante a inicialização (código {rc})"
             age = proc.playlist_age()
             if age is not None and age <= 5 and proc.playlist_fresh():
-                return True
-            self._sleep(0.5)
-        return False
+                return None
+            if self._sleep(0.5, runtime):
+                return RESTART_REASON
+        return "FFmpeg não gerou playlist HLS no tempo esperado"

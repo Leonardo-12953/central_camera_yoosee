@@ -71,61 +71,33 @@ def _back_link(prefix: str) -> str:
     )
 
 
+_CARD_TEMPLATE_CACHE: str | None = None
+
+
+def _camera_card_template() -> str:
+    """Markup do cartão, editável em templates/camera_card.html."""
+    global _CARD_TEMPLATE_CACHE
+    if _CARD_TEMPLATE_CACHE is None:
+        path = BASE_DIR / "templates" / "camera_card.html"
+        _CARD_TEMPLATE_CACHE = path.read_text(encoding="utf-8")
+    return _CARD_TEMPLATE_CACHE
+
+
 def _camera_card(spec: CameraSpec, base_path: str = "") -> str:
     base_path = (base_path or "").rstrip("/")
-    cam_id = html.escape(spec.id, quote=True)
-    name = html.escape(spec.name)
     hls = f"{base_path}/streams/{quote(spec.id)}/stream.m3u8"
-    rtsp = html.escape(spec.safe_url())
-    transport = html.escape(spec.transport.upper())
-    return f"""
-      <article class="camera-card live-mode" id="cam-{cam_id}" data-camera="{cam_id}" data-hls="{hls}">
-        <header class="card-head">
-          <div>
-            <h2>{name}</h2>
-            <p class="subtle">{rtsp} · {transport}</p>
-          </div>
-          <div class="badges">
-            <span class="badge" data-role="badge">conectando</span>
-            <span class="badge mode hidden" data-role="mode"></span>
-          </div>
-        </header>
-        <div class="video-wrap" data-role="wrap">
-          <video data-role="video" muted autoplay playsinline></video>
-          <div class="overlay" data-role="overlay">Conectando à câmera…</div>
-        </div>
-        <div class="replay-bar">
-          <span class="replay-time" data-role="replay-time">AO VIVO</span>
-          <input class="replay-range" data-role="replay-range" type="range"
-                 min="0" max="0" step="1" value="0" disabled
-                 aria-label="Voltar no tempo (até 30 minutos)">
-          <button type="button" data-role="live" class="ghost replay-live" disabled>Voltar ao vivo</button>
-        </div>
-        <div class="card-foot">
-          <div class="status-block">
-            <span class="status-text" data-role="message">Aguardando status…</span>
-            <span class="meta-text" data-role="meta"></span>
-          </div>
-          <div class="actions">
-            <label class="control">Vel.
-              <select data-role="speed">
-                <option value="0.5">0.5x</option>
-                <option value="1" selected>1x</option>
-                <option value="1.25">1.25x</option>
-                <option value="1.5">1.5x</option>
-                <option value="2">2x</option>
-              </select>
-            </label>
-            <label class="control">Vol.
-              <input data-role="volume" type="range" min="0" max="1" step="0.05" value="1">
-            </label>
-            <button type="button" data-role="sound" class="ghost">Ativar som</button>
-            <button type="button" data-role="fullscreen" class="ghost">Tela cheia</button>
-            <button type="button" data-role="retry" class="ghost">Reiniciar stream</button>
-            <button type="button" data-role="rename" class="ghost">Renomear</button>
-          </div>
-        </div>
-      </article>"""
+    values = {
+        "{{CAMERA_ID}}": html.escape(spec.id, quote=True),
+        "{{CAMERA_NAME}}": html.escape(spec.name),
+        "{{HLS_URL}}": html.escape(hls, quote=True),
+        "{{RTSP}}": html.escape(spec.safe_url()),
+        "{{TRANSPORT}}": html.escape(spec.transport.upper()),
+        "{{BASE_PATH}}": html.escape(base_path, quote=True),
+    }
+    body = _camera_card_template()
+    for placeholder, value in values.items():
+        body = body.replace(placeholder, value)
+    return body
 
 
 class ViewerServer(ThreadingHTTPServer):

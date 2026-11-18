@@ -6,6 +6,7 @@
 
   const cards = Array.from(document.querySelectorAll("[data-camera]"));
   const players = new Map();
+  const pendingRestarts = new Set();
   const STATE_LABEL = {
     connecting: "conectando",
     live: "ao vivo",
@@ -72,6 +73,10 @@
     }
     if (status.stream_healthy === true) parts.push("Saúde: OK");
     if (meta) meta.textContent = parts.join(" · ");
+
+    // Enquanto um reinício manual está em curso, não deixa o polling trocar
+    // o aviso "Reiniciando stream…" por "Reconectando…" e piscar a tela.
+    if (pendingRestarts.has(card.dataset.camera)) return;
 
     if (state === "live" || status.state === "running") {
       if (q(card, "video").readyState >= 2) hideOverlay(card);
@@ -395,6 +400,40 @@
     q(card, "overlay").onclick = () => video.play().catch(() => {});
   }
 
+  async function currentStatus(card) {
+    const response = await fetch(apiUrl("/api/status"), { cache: "no-store" });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const data = await response.json();
+    return (data.cameras || []).find((c) => c.id === card.dataset.camera) || null;
+  }
+
+  function waitForStreamReady(card, beforeRestarts, timeoutMs) {
+    const started = Date.now();
+    return new Promise((resolve, reject) => {
+      const check = async () => {
+        try {
+          const status = await currentStatus(card);
+          if (status) {
+            const state = status.state || "";
+            const uiState = status.ui_state || "";
+            const restarts = Number.isFinite(status.restarts) ? status.restarts : 0;
+            const live = state === "running" || uiState === "live";
+            if (live && restarts > beforeRestarts) {
+              resolve();
+              return;
+            }
+          }
+          if (Date.now() - started >= timeoutMs) {
+            reject(new Error("A transmissão não voltou a tempo."));
+            return;
+          }
+        } catch (_) { /* tenta novamente */ }
+        setTimeout(check, 400);
+      };
+      check();
+    });
+  }
+
   function wireButtons(card) {
     const camId = card.dataset.camera;
     const video = q(card, "video");
@@ -452,18 +491,38 @@
     }
 
     retry.addEventListener("click", async () => {
+      // Um clique por vez: evita filas de reinício e o loop de reconexão.
+      if (pendingRestarts.has(camId)) return;
+      pendingRestarts.add(camId);
       retry.disabled = true;
       showOverlay(card, "Reiniciando stream…");
+
+      let beforeRestarts = 0;
       try {
-        await fetch(apiUrl(`/api/cameras/${encodeURIComponent(camId)}/restart`), {
+        try {
+          const previous = await currentStatus(card);
+          if (previous && Number.isFinite(previous.restarts)) beforeRestarts = previous.restarts;
+        } catch (_) { /* segue mesmo sem status anterior */ }
+
+        const response = await fetch(apiUrl(`/api/cameras/${encodeURIComponent(camId)}/restart`), {
           method: "POST",
           cache: "no-store",
         });
-      } catch (_) { /* poll will report server state */ }
-      setTimeout(() => {
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+        try {
+          // Só recria o player depois que o supervisor terminou o reinício.
+          await waitForStreamReady(card, beforeRestarts, 20000);
+        } catch (_) {
+          showOverlay(card, "Aguardando a câmera responder…");
+        }
         startPlayer(card, 0);
+      } catch (_) {
+        showOverlay(card, "Não foi possível pedir o reinício. Tente novamente.");
+      } finally {
+        pendingRestarts.delete(camId);
         retry.disabled = false;
-      }, 2500);
+      }
     });
   }
 

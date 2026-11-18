@@ -1,0 +1,51 @@
+<article class="camera-card live-mode" id="cam-{{CAMERA_ID}}" data-camera="{{CAMERA_ID}}" data-hls="{{HLS_URL}}">
+  <header class="card-head">
+    <div>
+      <h2>{{CAMERA_NAME}}</h2>
+      <p class="subtle">{{RTSP}} · {{TRANSPORT}}</p>
+    </div>
+    <div class="badges">
+      <span class="badge" data-role="badge">conectando</span>
+      <span class="badge mode hidden" data-role="mode"></span>
+    </div>
+  </header>
+
+  <div class="video-wrap" data-role="wrap">
+    <video data-role="video" muted autoplay playsinline></video>
+    <div class="overlay" data-role="overlay">Conectando à câmera…</div>
+  </div>
+
+  <div class="replay-bar">
+    <span class="replay-time" data-role="replay-time">AO VIVO</span>
+    <input class="replay-range" data-role="replay-range" type="range"
+           min="0" max="0" step="1" value="0" disabled
+           aria-label="Voltar no tempo (até 30 minutos)">
+    <button type="button" data-role="live" class="ghost replay-live" disabled>Voltar ao vivo</button>
+  </div>
+
+  <!-- Botões primeiro; os logs da transmissão ficam logo abaixo (ver .card-foot no CSS). -->
+  <div class="card-foot">
+    <div class="actions">
+      <label class="control">Vel.
+        <select data-role="speed">
+          <option value="0.5">0.5x</option>
+          <option value="1" selected>1x</option>
+          <option value="1.25">1.25x</option>
+          <option value="1.5">1.5x</option>
+          <option value="2">2x</option>
+        </select>
+      </label>
+      <label class="control">Vol.
+        <input data-role="volume" type="range" min="0" max="1" step="0.05" value="1">
+      </label>
+      <button type="button" data-role="sound" class="ghost">Ativar som</button>
+      <button type="button" data-role="fullscreen" class="ghost">Tela cheia</button>
+      <button type="button" data-role="retry" class="ghost">Reiniciar stream</button>
+      <button type="button" data-role="rename" class="ghost">Renomear</button>
+    </div>
+    <div class="status-block">
+      <span class="status-text" data-role="message">Aguardando status…</span>
+      <span class="meta-text" data-role="meta"></span>
+    </div>
+  </div>
+</article>

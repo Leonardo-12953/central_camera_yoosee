@@ -43,7 +43,8 @@ yoosee_viewer/
 ├── logging_utils.py     # log rotativo com redação de credenciais
 ├── config.json          # câmeras e parâmetros HLS (sem senha)
 ├── secrets.json         # senhas (modo 600, fora do que é servido)
-├── templates/index.html
+├── templates/index.html       # página com {{CAMERA_CARDS}}
+├── templates/camera_card.html # markup de cada cartão (botões + logs)
 ├── static/player.js     # player hls.js, polling de status, reconexão de UI
 ├── static/cameras.js    # formulário "Adicionar câmera"
 ├── static/style.css
