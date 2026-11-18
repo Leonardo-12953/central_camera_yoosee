@@ -2301,6 +2301,7 @@ def _viewer_dir_candidates(configured: str = "") -> list[Path]:
     candidates.extend(
         [
             APP_DIR / "live_viewer",
+            RESOURCE_DIR / "live_viewer",
             APP_DIR.parent / "yoosee_viewer",
             Path.cwd() / "yoosee_viewer",
         ]
@@ -2439,9 +2440,9 @@ def _ensure_live_viewer() -> bool:
     if viewer_dir is None:
         logger.warning(
             "Pasta do Live Viewer não encontrada. Defina live_viewer.viewer_dir, "
-            "a variável LIVE_VIEWER_DIR ou mantenha o projeto ao lado do Central "
-            "(%s).",
-            APP_DIR.parent / "yoosee_viewer",
+            "a variável LIVE_VIEWER_DIR ou mantenha a pasta 'live_viewer' dentro "
+            "do Central (%s).",
+            APP_DIR / "live_viewer",
         )
         return False
 

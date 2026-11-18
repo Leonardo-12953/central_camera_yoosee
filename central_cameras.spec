@@ -13,6 +13,20 @@ datas = [
     (str(project_dir / "static"), "static"),
 ]
 
+# O Live Viewer faz parte do mesmo pacote. Segredos, streams e logs são
+# criados no computador de destino e nunca entram no executável.
+viewer_dir = project_dir / "live_viewer"
+if viewer_dir.is_dir():
+    for path in viewer_dir.rglob("*"):
+        if not path.is_file():
+            continue
+        relative = path.relative_to(viewer_dir)
+        if relative.parts[0] in {"streams", "logs", "__pycache__"}:
+            continue
+        if path.name == "secrets.json":
+            continue
+        datas.append((str(path), str(Path("live_viewer") / relative.parent)))
+
 hiddenimports = collect_submodules("waitress")
 
 a = Analysis(

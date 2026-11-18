@@ -30,3 +30,12 @@ central_cameras.log*
 .build-venv/
 build/
 dist/
+
+# Live Viewer integrado: config sem senha acompanha o projeto; senhas e
+# arquivos gerados em execução nunca devem ser versionados/distribuídos.
+!live_viewer/config.json
+live_viewer/secrets.json
+live_viewer/streams/*
+!live_viewer/streams/.gitkeep
+live_viewer/logs/*
+!live_viewer/logs/.gitkeep

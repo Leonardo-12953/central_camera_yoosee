@@ -1,0 +1,7 @@
+# Sem dependências Python externas: o visualizador usa somente a biblioteca padrão.
+#
+# Requisitos de sistema (não instalados por este projeto):
+#   - Python 3.10+
+#   - FFmpeg com os encoders libx264 e AAC
+#   - Navegador com suporte a Media Source Extensions (Chrome, Edge, Firefox)
+#     ou HLS nativo (Safari). O hls.js já está vendorizado em static/.

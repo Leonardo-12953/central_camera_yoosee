@@ -66,24 +66,33 @@ mesma rede. Se não abrir, libere a porta `5000` no firewall.
 
 ## Visualização ao vivo (LYSec Play | Live Viewer)
 
-O painel inclui a aba **Ao vivo**, servida pelo projeto complementar
-`yoosee_viewer` (RTSP → HLS). Basta iniciar o Central: ele detecta a pasta do
-viewer, sobe o serviço automaticamente em `http://127.0.0.1:8088` e o encerra
-junto com o Central.
+O painel inclui a aba **Ao vivo**, servida pelo Live Viewer (RTSP → HLS), que
+agora faz parte desta mesma pasta em `live_viewer/`. Basta iniciar o Central:
+ele sobe o viewer automaticamente em `http://127.0.0.1:8088` e o encerra junto
+com o Central.
 
-- A pasta do viewer é procurada automaticamente ao lado do Central
-  (`yoosee_viewer/` ou `live_viewer/`). Também pode ser definida em
-  **Configurações → Pasta do Live Viewer** ou pela variável `LIVE_VIEWER_DIR`.
+- A pasta `live_viewer/` está dentro do Central, então o sistema inteiro é
+  apenas **uma pasta**. O projeto antigo `yoosee_viewer/` pode ficar onde está
+  como referência/backup; o Central não o usa mais.
+- Pela interface do viewer dá para **adicionar câmeras** e **alterar o nome**
+  delas, sem editar arquivos.
 - Se o viewer já estiver em execução, o Central apenas se conecta a ele e não
   interfere no processo existente.
 - Para usar um viewer em outra máquina, desmarque o início automático e ajuste
   a URL do serviço nas configurações.
 - O log do processo iniciado pelo Central fica em
-  `yoosee_viewer/logs/central_sidecar.log`.
+  `live_viewer/logs/central_sidecar.log`.
+
+**Para distribuir:** envie a pasta `central_cameras/` inteira, mas **remova
+`live_viewer/secrets.json` antes** — as senhas ficam lá em texto puro (permissão
+`600`) e não devem acompanhar o pacote. No computador de destino, crie
+`live_viewer/secrets.json` com as chaves usadas em `live_viewer/config.json`.
+Os segmentos HLS em `live_viewer/streams/` e os logs são gerados em execução e
+não precisam ser enviados.
 
 > No modo executável empacotado, o início automático ainda depende de um Python
-> disponível no sistema. O empacotamento do viewer junto ao Central está previsto
-> como etapa seguinte.
+> disponível no sistema. A integração completa no executável está prevista como
+> etapa seguinte.
 
 ## Rodar a partir do código
 

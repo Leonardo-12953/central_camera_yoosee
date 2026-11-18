@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="pt-BR" data-base-path="{{BASE_PATH}}">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LYSec Play | Live Viewer</title>
+  <link rel="stylesheet" href="{{BASE_PATH}}/static/style.css">
+  <script src="{{BASE_PATH}}/static/hls.min.js" defer></script>
+  <script src="{{BASE_PATH}}/static/player.js" defer></script>
+  <script src="{{BASE_PATH}}/static/cameras.js" defer></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="dot"></span>
+      <div>
+        <h1>LYSec Play | Live Viewer</h1>
+        <p>RTSP → HLS local · vídeo H.265 convertido para H.264</p>
+      </div>
+    </div>
+    <div class="topbar-actions">
+      <button type="button" class="btn-add" id="add-camera-btn">
+        <span aria-hidden="true">+</span> Adicionar câmera
+      </button>
+{{BACK_LINK}}
+      <div class="legend">
+        <span class="badge live">ao vivo</span>
+        <span class="badge reconnecting">reconectando</span>
+        <span class="badge offline">offline</span>
+        <span class="badge error">erro</span>
+      </div>
+    </div>
+  </header>
+
+  <main class="cameras">
+{{CAMERA_CARDS}}
+  </main>
+
+  <dialog id="add-camera-dialog" class="camera-dialog" aria-labelledby="add-camera-title">
+    <form id="add-camera-form" novalidate>
+      <div class="dialog-head">
+        <div>
+          <h2 id="add-camera-title">Adicionar câmera</h2>
+          <p class="dialog-hint">
+            Preencha os dados da nova câmera. Ela aparece na lista assim que for cadastrada.
+          </p>
+        </div>
+        <button type="button" class="dialog-close" data-close aria-label="Fechar">×</button>
+      </div>
+
+      <div class="form-grid">
+        <div class="form-field span-2">
+          <label for="cam-name">Nome da câmera</label>
+          <input id="cam-name" name="name" type="text" maxlength="80" required
+                 placeholder="Ex.: Portão da frente">
+        </div>
+        <div class="form-field">
+          <label for="cam-host">IP ou endereço</label>
+          <input id="cam-host" name="host" type="text" maxlength="253" required
+                 placeholder="10.0.0.191" autocomplete="off">
+        </div>
+        <div class="form-field">
+          <label for="cam-port">Porta RTSP</label>
+          <input id="cam-port" name="port" type="number" min="1" max="65535" value="554" required>
+        </div>
+        <div class="form-field">
+          <label for="cam-user">Usuário</label>
+          <input id="cam-user" name="username" type="text" maxlength="64" value="admin"
+                 required autocomplete="off">
+        </div>
+        <div class="form-field">
+          <label for="cam-password">Senha</label>
+          <input id="cam-password" name="password" type="password" maxlength="200"
+                 required autocomplete="new-password">
+        </div>
+        <div class="form-field span-2">
+          <label for="cam-path">Caminho do stream RTSP</label>
+          <input id="cam-path" name="path" type="text" maxlength="200" value="/onvif1" required>
+          <span class="field-hint">Para câmeras Yoosee, normalmente é <code>/onvif1</code>.</span>
+        </div>
+        <div class="form-field span-2">
+          <label for="cam-transport">Transporte</label>
+          <select id="cam-transport" name="transport">
+            <option value="udp" selected>UDP (padrão)</option>
+            <option value="tcp">TCP</option>
+          </select>
+        </div>
+      </div>
+
+      <details class="advanced">
+        <summary>Ajustes avançados (opcional)</summary>
+        <div class="form-grid">
+          <div class="form-field">
+            <label for="cam-width">Largura da imagem</label>
+            <input id="cam-width" name="output_width" type="number" min="320" max="4096" value="1280">
+          </div>
+          <div class="form-field">
+            <label for="cam-height">Altura (0 = automática)</label>
+            <input id="cam-height" name="output_height" type="number" min="0" max="4096" value="0">
+          </div>
+          <div class="form-field">
+            <label for="cam-fps">FPS de entrada</label>
+            <input id="cam-fps" name="input_fps" type="number" min="1" max="60" value="15">
+          </div>
+          <div class="form-field">
+            <label for="cam-vbitrate">Bitrate de vídeo</label>
+            <input id="cam-vbitrate" name="video_bitrate" type="text" maxlength="16" value="2500k">
+          </div>
+          <div class="form-field">
+            <label for="cam-abitrate">Bitrate de áudio</label>
+            <input id="cam-abitrate" name="audio_bitrate" type="text" maxlength="16" value="64k">
+          </div>
+        </div>
+      </details>
+
+      <p class="form-error" id="add-camera-error" role="alert" hidden></p>
+
+      <div class="dialog-actions">
+        <button type="button" class="ghost" data-close>Cancelar</button>
+        <button type="submit" class="btn-primary" id="add-camera-submit">Adicionar câmera</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="rename-camera-dialog" class="camera-dialog rename-dialog" aria-labelledby="rename-camera-title">
+    <form id="rename-camera-form" novalidate>
+      <div class="dialog-head">
+        <div>
+          <h2 id="rename-camera-title">Alterar nome da câmera</h2>
+          <p class="dialog-hint" id="rename-camera-hint">O nome aparece no cartão da câmera.</p>
+        </div>
+        <button type="button" class="dialog-close" data-rename-close aria-label="Fechar">×</button>
+      </div>
+
+      <div class="form-grid">
+        <div class="form-field span-2">
+          <label for="rename-name">Novo nome</label>
+          <input id="rename-name" name="name" type="text" maxlength="80" required
+                 autocomplete="off" placeholder="Ex.: Portão da frente">
+        </div>
+      </div>
+
+      <p class="form-error" id="rename-camera-error" role="alert" hidden></p>
+
+      <div class="dialog-actions">
+        <button type="button" class="ghost" data-rename-close>Cancelar</button>
+        <button type="submit" class="btn-primary" id="rename-camera-submit">Salvar nome</button>
+      </div>
+    </form>
+  </dialog>
+
+  <footer class="footer">
+    <span>Servidor local. Credenciais ficam fora desta página.</span>
+    <span id="clock"></span>
+  </footer>
+</body>
+</html>

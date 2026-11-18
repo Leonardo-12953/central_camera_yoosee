@@ -1,0 +1,48 @@
+{
+  "server": {
+    "host": "127.0.0.1",
+    "port": 8088
+  },
+  "hls": {
+    "segment_seconds": 2,
+    "playlist_size": 6,
+    "delete_threshold": 2,
+    "stall_timeout_seconds": 15,
+    "start_grace_seconds": 12,
+    "replay_minutes": 30
+  },
+  "cameras": [
+    {
+      "id": "yoosee-190",
+      "name": "Portão YL",
+      "host": "10.0.0.190",
+      "port": 554,
+      "username": "admin",
+      "secret": "camera_190_password",
+      "path": "/onvif1",
+      "transport": "udp",
+      "enabled": true,
+      "output_width": 1280,
+      "output_height": 0,
+      "video_bitrate": "2500k",
+      "audio_bitrate": "64k",
+      "input_fps": 15
+    },
+    {
+      "id": "cam-192-168-0-112",
+      "name": "Corredor",
+      "host": "192.168.0.112",
+      "port": 554,
+      "username": "admin",
+      "secret": "camera_cam_192_168_0_112_password",
+      "path": "/onvif1",
+      "transport": "udp",
+      "enabled": true,
+      "output_width": 1280,
+      "output_height": 0,
+      "video_bitrate": "2500k",
+      "audio_bitrate": "64k",
+      "input_fps": 15
+    }
+  ]
+}
