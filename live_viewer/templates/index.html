@@ -50,35 +50,53 @@
 
       <div class="form-grid">
         <div class="form-field span-2">
+          <label for="cam-source-type">Tipo de câmera</label>
+          <select id="cam-source-type" name="source_type">
+            <option value="rtsp" selected>Câmera IP / RTSP (usuário e senha)</option>
+            <option value="public">Câmera pública (YouTube ou link HLS)</option>
+          </select>
+          <span class="field-hint">
+            Na opção pública você só precisa do nome e do link; os campos RTSP são preenchidos automaticamente.
+          </span>
+        </div>
+        <div class="form-field span-2" data-source-url-field hidden>
+          <label for="cam-source-url">Link da transmissão pública</label>
+          <input id="cam-source-url" name="source_url" type="text" maxlength="500"
+                 placeholder="https://www.youtube.com/watch?v=A9Ztonz1Lgs" autocomplete="off">
+          <span class="field-hint">
+            Cole a URL do vídeo ao vivo do YouTube ou uma URL <code>.m3u8</code>. Ela substitui o RTSP.
+          </span>
+        </div>
+        <div class="form-field span-2">
           <label for="cam-name">Nome da câmera</label>
           <input id="cam-name" name="name" type="text" maxlength="80" required
-                 placeholder="Ex.: Portão da frente">
+                 placeholder="Ex.: Copacabana (pública)">
         </div>
-        <div class="form-field">
+        <div class="form-field" data-rtsp-only>
           <label for="cam-host">IP ou endereço</label>
           <input id="cam-host" name="host" type="text" maxlength="253" required
                  placeholder="10.0.0.191" autocomplete="off">
         </div>
-        <div class="form-field">
+        <div class="form-field" data-rtsp-only>
           <label for="cam-port">Porta RTSP</label>
           <input id="cam-port" name="port" type="number" min="1" max="65535" value="554" required>
         </div>
-        <div class="form-field">
+        <div class="form-field" data-rtsp-only>
           <label for="cam-user">Usuário</label>
           <input id="cam-user" name="username" type="text" maxlength="64" value="admin"
                  required autocomplete="off">
         </div>
-        <div class="form-field">
+        <div class="form-field" data-rtsp-only>
           <label for="cam-password">Senha</label>
           <input id="cam-password" name="password" type="password" maxlength="200"
                  required autocomplete="new-password">
         </div>
-        <div class="form-field span-2">
+        <div class="form-field span-2" data-rtsp-only>
           <label for="cam-path">Caminho do stream RTSP</label>
           <input id="cam-path" name="path" type="text" maxlength="200" value="/onvif1" required>
           <span class="field-hint">Para câmeras Yoosee, normalmente é <code>/onvif1</code>.</span>
         </div>
-        <div class="form-field span-2">
+        <div class="form-field span-2" data-rtsp-only>
           <label for="cam-transport">Transporte</label>
           <select id="cam-transport" name="transport">
             <option value="udp" selected>UDP (padrão)</option>
@@ -86,6 +104,16 @@
           </select>
         </div>
       </div>
+
+      <details class="advanced">
+        <summary>Como encontrar o link do YouTube?</summary>
+        <p class="dialog-hint">
+          Abra a transmissão <strong>ao vivo</strong> no YouTube e copie a URL do navegador.
+          Exemplo: <code>https://www.youtube.com/watch?v=A9Ztonz1Lgs</code>.
+          Também serve <code>https://youtu.be/A9Ztonz1Lgs</code> ou um link HLS direto terminando em <code>.m3u8</code>.
+          O viewer usa <code>yt-dlp</code> para transformar esse link no stream usado pelo player e renova a URL a cada reinício.
+        </p>
+      </details>
 
       <details class="advanced">
         <summary>Ajustes avançados (opcional)</summary>
@@ -145,6 +173,151 @@
       <div class="dialog-actions">
         <button type="button" class="ghost" data-rename-close>Cancelar</button>
         <button type="submit" class="btn-primary" id="rename-camera-submit">Salvar nome</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="settings-camera-dialog" class="camera-dialog settings-dialog" aria-labelledby="settings-camera-title">
+    <form id="settings-camera-form" novalidate>
+      <div class="dialog-head">
+        <div>
+          <h2 id="settings-camera-title">Configurações da câmera</h2>
+          <p class="dialog-hint" id="settings-camera-hint">
+            Todos os dados usados para acessar esta câmera. Salvar aplica as mudanças e reinicia o stream.
+          </p>
+        </div>
+        <button type="button" class="dialog-close" data-settings-close aria-label="Fechar">×</button>
+      </div>
+
+      <div class="form-grid">
+        <div class="form-field">
+          <label for="settings-id">ID (não editável)</label>
+          <input id="settings-id" name="id" type="text" readonly>
+        </div>
+        <div class="form-field">
+          <label for="settings-name">Nome da câmera</label>
+          <input id="settings-name" name="name" type="text" maxlength="80" required>
+        </div>
+        <div class="form-field">
+          <label for="settings-host">IP ou endereço</label>
+          <input id="settings-host" name="host" type="text" maxlength="253" required autocomplete="off">
+        </div>
+        <div class="form-field">
+          <label for="settings-port">Porta RTSP</label>
+          <input id="settings-port" name="port" type="number" min="1" max="65535" required>
+        </div>
+        <div class="form-field">
+          <label for="settings-user">Usuário</label>
+          <input id="settings-user" name="username" type="text" maxlength="64" required autocomplete="off">
+        </div>
+        <div class="form-field">
+          <label for="settings-secret">Chave do segredo (interna)</label>
+          <input id="settings-secret" name="secret" type="text" readonly>
+          <span class="field-hint">Onde a senha fica em <code>secrets.json</code>.</span>
+        </div>
+        <div class="form-field span-2">
+          <label for="settings-password">Senha</label>
+          <input id="settings-password" name="password" type="password" maxlength="200"
+                 autocomplete="new-password">
+          <span class="field-hint">Deixe em branco para manter a senha atual.</span>
+          <label class="show-password">
+            <input id="settings-show-password" type="checkbox"> Mostrar senha
+          </label>
+        </div>
+        <div class="form-field span-2">
+          <label for="settings-source-url">URL pública (YouTube / HLS)</label>
+          <input id="settings-source-url" name="source_url" type="text" maxlength="500"
+                 placeholder="https://www.youtube.com/watch?v=..." autocomplete="off">
+          <span class="field-hint">
+            Se preenchida, substitui o RTSP: é o que permite testar uma câmera pública como o YouTube.
+            Deixe vazio para usar host, porta, usuário e caminho abaixo.
+          </span>
+        </div>
+        <div class="form-field span-2">
+          <label for="settings-path">Caminho do stream RTSP</label>
+          <input id="settings-path" name="path" type="text" maxlength="200" required>
+        </div>
+        <div class="form-field">
+          <label for="settings-transport">Transporte</label>
+          <select id="settings-transport" name="transport">
+            <option value="udp">UDP</option>
+            <option value="tcp">TCP</option>
+          </select>
+        </div>
+        <div class="form-field">
+          <label for="settings-enabled">Câmera ativada</label>
+          <select id="settings-enabled" name="enabled">
+            <option value="true">Sim</option>
+            <option value="false">Não</option>
+          </select>
+        </div>
+        <div class="form-field span-2">
+          <label for="settings-detection">Detecção por IA</label>
+          <select id="settings-detection" name="detection_enabled">
+            <option value="inherit">Herdar configuração global</option>
+            <option value="true">Ativada nesta câmera</option>
+            <option value="false">Desativada nesta câmera</option>
+          </select>
+        </div>
+      </div>
+
+      <details class="advanced">
+        <summary>Ajustes avançados de imagem (opcional)</summary>
+        <div class="form-grid">
+          <div class="form-field">
+            <label for="settings-width">Largura</label>
+            <input id="settings-width" name="output_width" type="number" min="320" max="4096">
+          </div>
+          <div class="form-field">
+            <label for="settings-height">Altura (0 = automática)</label>
+            <input id="settings-height" name="output_height" type="number" min="0" max="4096">
+          </div>
+          <div class="form-field">
+            <label for="settings-fps">FPS de entrada</label>
+            <input id="settings-fps" name="input_fps" type="number" min="1" max="60">
+          </div>
+          <div class="form-field">
+            <label for="settings-vbitrate">Bitrate de vídeo</label>
+            <input id="settings-vbitrate" name="video_bitrate" type="text" maxlength="16">
+          </div>
+          <div class="form-field">
+            <label for="settings-abitrate">Bitrate de áudio</label>
+            <input id="settings-abitrate" name="audio_bitrate" type="text" maxlength="16">
+          </div>
+        </div>
+      </details>
+
+      <p class="form-error" id="settings-camera-error" role="alert" hidden></p>
+
+      <div class="dialog-actions">
+        <button type="button" class="ghost" data-settings-close>Cancelar</button>
+        <button type="submit" class="btn-primary" id="settings-camera-submit">Salvar configurações</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="remove-camera-dialog" class="camera-dialog remove-dialog" aria-labelledby="remove-camera-title">
+    <form id="remove-camera-form" novalidate>
+      <div class="dialog-head">
+        <div>
+          <h2 id="remove-camera-title">Remover câmera</h2>
+          <p class="dialog-hint" id="remove-camera-hint">
+            A câmera será removida da configuração e seu stream será encerrado.
+          </p>
+        </div>
+        <button type="button" class="dialog-close" data-remove-close aria-label="Fechar">×</button>
+      </div>
+
+      <p class="remove-warning">
+        Isso também apaga a senha salva, as detecções e os snapshots desta câmera.
+        Os dados das outras câmeras não são afetados.
+      </p>
+
+      <p class="form-error" id="remove-camera-error" role="alert" hidden></p>
+
+      <div class="dialog-actions">
+        <button type="button" class="ghost" data-remove-close>Cancelar</button>
+        <button type="submit" class="btn-danger" id="remove-camera-submit">Remover câmera</button>
       </div>
     </form>
   </dialog>

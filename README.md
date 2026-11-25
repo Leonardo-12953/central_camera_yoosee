@@ -29,6 +29,8 @@ você.
 - Apaga automaticamente as gravações mais antigas que o prazo configurado.
 - Exige login e pode ser acessado pelo celular ou por outro computador da mesma
   rede.
+- Na aba **Ao vivo**, identifica pessoas, desenha as caixas sobre o vídeo, salva
+  eventos com snapshot e mostra recortes de rostos/placas nas laterais.
 
 > O programa **não grava** as câmeras. Ele organiza e exibe as gravações que o
 > Yoosee Desktop já salva no computador.
@@ -74,8 +76,19 @@ com o Central.
 - A pasta `live_viewer/` está dentro do Central, então o sistema inteiro é
   apenas **uma pasta**. O projeto antigo `yoosee_viewer/` pode ficar onde está
   como referência/backup; o Central não o usa mais.
-- Pela interface do viewer dá para **adicionar câmeras** e **alterar o nome**
-  delas, sem editar arquivos.
+- Pela interface do viewer dá para **adicionar câmeras**, **alterar o nome**,
+  **editar todas as configurações de acesso** pela engrenagem no cartão e
+  **remover câmeras**, sem editar arquivos. A edição mostra inclusive a senha e o
+  `source_url`, salva a alteração e reinicia o stream daquela câmera. A remoção
+  encerra o stream e a IA, apaga a senha salva, os eventos e os snapshots dela;
+  as demais câmeras continuam funcionando.
+- Também há uma **câmera pública de teste** (`pub-copacabana`, Copacabana/RJ,
+  <https://worldwatcher.live/cam/AYcY3pIV>) cadastrada com `source_url` no
+  `live_viewer/config.json`. Ela usa `yt-dlp` para ler a transmissão do YouTube
+  e serve para testar o player e a detecção sem depender das câmeras locais.
+  Para adicionar outra, use **Adicionar câmera → Câmera pública**: só precisa do
+  nome e do link `https://www.youtube.com/watch?v=...` de uma transmissão ao vivo
+  (ou de uma URL `.m3u8`). O viewer preenche o resto automaticamente.
 - Se o viewer já estiver em execução, o Central apenas se conecta a ele e não
   interfere no processo existente.
 - Para usar um viewer em outra máquina, desmarque o início automático e ajuste
@@ -83,12 +96,54 @@ com o Central.
 - O log do processo iniciado pelo Central fica em
   `live_viewer/logs/central_sidecar.log`.
 
+### Visão computacional no Ao vivo
+
+O viewer identifica **pessoas** usando YOLOv9-t em ONNX (`cv2.dnn`) e OC-SORT
+para manter o `track_id` entre frames. Veículos continuam sendo detectados só
+internamente, para tentar capturar a placa. Ele **não abre uma segunda conexão
+RTSP**: um FFmpeg auxiliar lê a própria playlist HLS do viewer, e as caixas são
+desenhadas em um `<canvas>` sobre o player, sem recodificar o vídeo.
+
+- Só pessoas aparecem no overlay, sem nome de classe nem percentual. A faixa
+  **esquerda** mostra rostos (YuNet) e a **direita** mostra placas (heurística
+  local, sem OCR), em fila: ao encher, o mais antigo sai. É captura local de
+  imagem — não há reconhecimento facial, OCR nem banco de identidades.
+- A configuração fica em `detection` dentro de `live_viewer/config.json`:
+  `enabled`, `model`, `model_url`, `input_size`, `confidence` (padrão `0.25`),
+  `iou`, `fps` (amostragem, padrão `2`), `max_width`, `classes` (deixe `person`),
+  `max_age`, `min_track_len`, `event_cooldown_seconds`, `snapshot`, `prefer_cuda`,
+  `face_model`, `face_model_url`, `face_confidence`, `crop_queue_size` e
+  `crop_attempts`.
+- Para desativar em uma câmera específica, adicione `"detection_enabled": false`
+  ao objeto dela em `cameras`. Para desativar em todas, use
+  `"detection": { "enabled": false }`.
+- Os modelos são baixados uma vez: YOLOv9 do
+  [Kalray/yolov9](https://huggingface.co/Kalray/yolov9/resolve/main/yolov9t.onnx)
+  e YuNet do
+  [OpenCV Zoo](https://github.com/opencv/opencv_zoo/raw/main/models/face_detection_yunet/face_detection_yunet_2023mar.onnx),
+  ambos em `live_viewer/models/`. Eventos deduplicados por `track_id`, snapshots
+  anotados e recortes `face_*.jpg`/`plate_*.jpg` ficam em
+  `live_viewer/events/<id-da-camera>/`.
+- A estimativa de velocidade dos veículos ainda não está pronta; os recortes de
+  placa ficam salvos para servir de base a essa etapa futura.
+- A interface consulta `GET /api/detections` (estado por câmera) e
+  `GET /api/events` (histórico recente, com URL do snapshot).
+- As dependências `numpy` e `opencv-python-headless` já estão em
+  `requirements.txt`. Se elas faltarem ou o modelo não puder ser obtido, o
+  player continua funcionando normalmente — apenas a IA fica indisponível.
+- O modelo YOLO ONNX é distribuído pelo autor sob **AGPL-3.0**; ele não é incluído
+  no zip e é baixado em tempo de execução. YuNet é **Apache-2.0** e o rastreador
+  OC-SORT adaptado é **MIT** (créditos em `live_viewer/vision/tracker/__init__.py`).
+
 **Para distribuir:** envie a pasta `central_cameras/` inteira, mas **remova
 `live_viewer/secrets.json` antes** — as senhas ficam lá em texto puro (permissão
 `600`) e não devem acompanhar o pacote. No computador de destino, crie
 `live_viewer/secrets.json` com as chaves usadas em `live_viewer/config.json`.
-Os segmentos HLS em `live_viewer/streams/` e os logs são gerados em execução e
-não precisam ser enviados.
+Os segmentos HLS em `live_viewer/streams/`, os logs, `live_viewer/models/` e
+`live_viewer/events/` são gerados em execução e não precisam ser enviados.
+Para a IA funcionar no pacote executável, o Python usado pelo viewer também
+precisa ter `numpy` e `opencv-python-headless` instalados (ou defina
+`LIVE_VIEWER_PYTHON` apontando para esse interpretador).
 
 > No modo executável empacotado, o início automático ainda depende de um Python
 > disponível no sistema. A integração completa no executável está prevista como

@@ -7,11 +7,23 @@
     <div class="badges">
       <span class="badge" data-role="badge">conectando</span>
       <span class="badge mode hidden" data-role="mode"></span>
+      <span class="badge ai hidden" data-role="ai-badge">IA: —</span>
+      <button type="button" class="settings-gear" data-role="settings"
+              aria-label="Configurações da câmera" title="Configurações da câmera">⚙</button>
     </div>
   </header>
 
   <div class="video-wrap" data-role="wrap">
     <video data-role="video" muted autoplay playsinline></video>
+    <canvas class="detection-canvas" data-role="detections" aria-hidden="true"></canvas>
+    <div class="crop-rail crop-rail-left" data-role="faces">
+      <span class="crop-rail-title">Rostos</span>
+      <div class="crop-rail-items" data-role="face-items"></div>
+    </div>
+    <div class="crop-rail crop-rail-right" data-role="plates">
+      <span class="crop-rail-title">Placas</span>
+      <div class="crop-rail-items" data-role="plate-items"></div>
+    </div>
     <div class="overlay" data-role="overlay">Conectando à câmera…</div>
   </div>
 
@@ -42,6 +54,7 @@
       <button type="button" data-role="fullscreen" class="ghost">Tela cheia</button>
       <button type="button" data-role="retry" class="ghost">Reiniciar stream</button>
       <button type="button" data-role="rename" class="ghost">Renomear</button>
+      <button type="button" data-role="remove" class="ghost danger">Remover</button>
     </div>
     <div class="status-block">
       <span class="status-text" data-role="message">Aguardando status…</span>

@@ -53,6 +53,8 @@ class FFmpegProcess:
             }
         self.logger = logger
         self.segment_seconds = max(1, int(self.hls_cfg["segment_seconds"]))
+        # Fontes públicas informam uma URL completa em vez de host RTSP.
+        self.source_url = str(getattr(spec, "source_url", "") or "").strip()
         # 30 minutos é o teto rígido do replay.
         self.replay_seconds = max(0, min(30, int(self.hls_cfg.get("replay_minutes", 0)))) * 60
         self.out_dir = base_dir / "streams" / spec.id
@@ -69,12 +71,18 @@ class FFmpegProcess:
 
     # ------------------------------------------------------------------ URL
     def _url(self) -> str:
+        if self.source_url:
+            from source_resolver import resolve_source
+            return resolve_source(self.source_url)
         user = quote(self.spec.username, safe="")
         secret = quote(self.password, safe="")
         return (f"rtsp://{user}:{secret}@{self.spec.host}:{self.spec.port}"
                 f"{self.spec.path}")
 
     def safe_url(self) -> str:
+        if self.source_url:
+            from source_resolver import display_url
+            return display_url(self.source_url)
         return (f"rtsp://{self.spec.username}:***@{self.spec.host}:"
                 f"{self.spec.port}{self.spec.path}")
 
@@ -108,8 +116,17 @@ class FFmpegProcess:
 
         cmd = [
             FFMPEG, "-hide_banner", "-nostdin", "-loglevel", "info",
-            "-rtsp_transport", self.spec.transport,
-            "-timeout", "10000000",
+        ]
+        if self.source_url:
+            # URL pública (YouTube/HLS): não é RTSP e a URL assinada expira;
+            # o resolve_source é chamado de novo a cada reinício do FFmpeg.
+            cmd += ["-rw_timeout", "30000000", "-live_start_index", "-1"]
+        else:
+            cmd += [
+                "-rtsp_transport", self.spec.transport,
+                "-timeout", "10000000",
+            ]
+        cmd += [
             "-i", self._url(),
             "-map", "0:v:0",
             "-map", "0:a:0?",
@@ -344,6 +361,11 @@ class FFmpegProcess:
                 if not line:
                     continue
                 line = self._redact(line)[:2000]
+                if self.source_url:
+                    from source_resolver import is_noisy_source_line, redact_stream_urls
+                    if is_noisy_source_line(line):
+                        continue
+                    line = redact_stream_urls(line)
                 self.logger.warning("[%s] ffmpeg: %s", self.spec.id, line)
                 if hasattr(self, "on_stderr"):
                     try:

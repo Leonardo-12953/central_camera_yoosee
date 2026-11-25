@@ -93,6 +93,144 @@
     }
   }
 
+  // ---------------------------------------------------------------- detecções
+  function drawDetections(card, state) {
+    const canvas = q(card, "detections");
+    const badge = q(card, "ai-badge");
+    if (!canvas) return;
+
+    const detections = Array.isArray(state && state.detections) ? state.detections : [];
+    const updated = state && state.updated_at ? Date.parse(state.updated_at) : 0;
+    const stale = !updated || Date.now() - updated > 6000;
+    const visible = stale ? [] : detections;
+
+    if (badge) {
+      const enabled = Boolean(state && state.enabled);
+      badge.classList.toggle("hidden", !enabled);
+      if (enabled) {
+        badge.textContent = state.status === "error"
+          ? "IA: erro"
+          : `IA: ${visible.length}${visible.length === 1 ? " pessoa" : " pessoas"}`;
+      }
+    }
+
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    const ratio = window.devicePixelRatio || 1;
+    const width = canvas.clientWidth;
+    const height = canvas.clientHeight;
+    const backingWidth = Math.max(1, Math.round(width * ratio));
+    const backingHeight = Math.max(1, Math.round(height * ratio));
+    if (canvas.width !== backingWidth || canvas.height !== backingHeight) {
+      canvas.width = backingWidth;
+      canvas.height = backingHeight;
+    }
+    ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+    ctx.clearRect(0, 0, width, height);
+    if (!visible.length) return;
+
+    // O vídeo usa object-fit: contain; as caixas vêm normalizadas pelo frame
+    // processado, então precisamos desenhar dentro do retângulo real do vídeo.
+    const video = q(card, "video");
+    const videoWidth = video && video.videoWidth ? video.videoWidth : 16;
+    const videoHeight = video && video.videoHeight ? video.videoHeight : 9;
+    const scale = Math.min(width / videoWidth, height / videoHeight);
+    const drawWidth = videoWidth * scale;
+    const drawHeight = videoHeight * scale;
+    const offsetX = (width - drawWidth) / 2;
+    const offsetY = (height - drawHeight) / 2;
+
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = "#39d0a3";
+    for (const item of visible) {
+      // O backend já só envia pessoas; a checagem evita qualquer classe
+      // interna (veículos) aparecer caso a API mude.
+      if (item.class_id != null && Number(item.class_id) !== 0) continue;
+      if (item.nx == null || item.ny == null) continue;
+      const x = offsetX + item.nx * drawWidth;
+      const y = offsetY + item.ny * drawHeight;
+      ctx.strokeRect(x, y, (item.nw || 0) * drawWidth, (item.nh || 0) * drawHeight);
+    }
+  }
+
+  // ---------------------------------------------------------- recortes laterais
+  function cropUrl(card, item) {
+    return apiUrl(
+      `/events/${encodeURIComponent(card.dataset.camera)}/${encodeURIComponent(item.file)}`
+    );
+  }
+
+  function makeThumb(card, item, kind) {
+    const thumb = document.createElement("div");
+    thumb.className = `crop-thumb ${kind}`;
+    const img = document.createElement("img");
+    img.src = cropUrl(card, item);
+    img.alt = kind === "face" ? "Rosto detectado" : "Placa detectada";
+    img.title = fmtClock(item.timestamp) || "";
+    img.loading = "lazy";
+    thumb.appendChild(img);
+    return thumb;
+  }
+
+  // Mantém só o que cabe na altura disponível: quando enche, os primeiros
+  // (mais antigos) ficam escondidos e os novos aparecem embaixo.
+  function fitRail(container) {
+    if (!container) return;
+    const items = Array.from(container.children);
+    if (!items.length) return;
+    // Medir com `hidden` daria altura 0; desoculta só durante a medição.
+    items.forEach((el) => { el.hidden = false; });
+    const gap = Number.parseFloat(getComputedStyle(container).rowGap) || 0;
+    const available = container.clientHeight;
+    let used = 0;
+    let keep = 0;
+    for (let i = items.length - 1; i >= 0; i -= 1) {
+      used += items[i].offsetHeight + (keep ? gap : 0);
+      if (used > available) break;
+      keep += 1;
+    }
+    items.forEach((el, index) => {
+      el.hidden = index < items.length - keep;
+    });
+  }
+
+  function renderCrops(card, state) {
+    const faces = Array.isArray(state && state.faces) ? state.faces : [];
+    const plates = Array.isArray(state && state.plates) ? state.plates : [];
+    const signature = `${faces.map((item) => item.file).join("|")}#${plates
+      .map((item) => item.file)
+      .join("|")}`;
+    if (card.dataset.cropSignature === signature) {
+      fitRail(q(card, "face-items"));
+      fitRail(q(card, "plate-items"));
+      return;
+    }
+    card.dataset.cropSignature = signature;
+    const faceItems = q(card, "face-items");
+    const plateItems = q(card, "plate-items");
+    if (!faceItems || !plateItems) return;
+    faceItems.replaceChildren(...faces.map((item) => makeThumb(card, item, "face")));
+    plateItems.replaceChildren(...plates.map((item) => makeThumb(card, item, "plate")));
+    fitRail(faceItems);
+    fitRail(plateItems);
+  }
+
+  async function pollDetections() {
+    try {
+      const response = await fetch(apiUrl("/api/detections"), { cache: "no-store" });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const data = await response.json();
+      const byId = new Map((data.cameras || []).map((c) => [c.camera_id || c.id, c]));
+      for (const card of cards) {
+        const state = byId.get(card.dataset.camera);
+        drawDetections(card, state);
+        renderCrops(card, state);
+      }
+    } catch (_) {
+      for (const card of cards) drawDetections(card, null);
+    }
+  }
+
   const LIVE_EPSILON = 3;
 
   function replayParts(card) {
@@ -625,7 +763,15 @@
     startPlayer(card);
   }
   poll();
+  pollDetections();
   tickClock();
   setInterval(poll, 2000);
+  setInterval(pollDetections, 1000);
   setInterval(tickClock, 1000);
+  window.addEventListener("resize", () => {
+    for (const card of cards) {
+      fitRail(q(card, "face-items"));
+      fitRail(q(card, "plate-items"));
+    }
+  });
 })();

@@ -39,3 +39,7 @@ live_viewer/streams/*
 !live_viewer/streams/.gitkeep
 live_viewer/logs/*
 !live_viewer/logs/.gitkeep
+live_viewer/models/*
+!live_viewer/models/.gitkeep
+live_viewer/events/*
+!live_viewer/events/.gitkeep

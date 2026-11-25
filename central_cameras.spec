@@ -21,7 +21,7 @@ if viewer_dir.is_dir():
         if not path.is_file():
             continue
         relative = path.relative_to(viewer_dir)
-        if relative.parts[0] in {"streams", "logs", "__pycache__"}:
+        if relative.parts[0] in {"streams", "logs", "__pycache__", "models", "events"}:
             continue
         if path.name == "secrets.json":
             continue

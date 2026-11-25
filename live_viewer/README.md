@@ -1,13 +1,18 @@
 # LYSec Play | Live Viewer
 
-Visualizador independente que converte o RTSP de câmeras Yoosee em **HLS** reproduzível
-no navegador. Feito para testar a ideia antes de integrar ao projeto **Central Cameras**.
+Visualizador de RTSP de câmeras Yoosee em **HLS** reproduzível no navegador,
+integrado ao **Central Cameras** e com detecção opcional de objetos/pessoas.
 
-- Python **somente biblioteca padrão** (nenhum pacote pip).
+- Servidor, supervisor e API usam **somente biblioteca padrão**; `numpy` e
+  `opencv-python-headless` são necessários apenas para a IA.
 - **FFmpeg** faz a conversão: H.265/HEVC → H.264, G.711 → AAC.
 - **Um processo FFmpeg por câmera**, supervisionado e reiniciado automaticamente.
 - Página responsiva com player, estado da conexão e botão de reinício.
 - **Replay de até 30 minutos**: arraste a barra abaixo do vídeo para voltar no tempo.
+- **Visão computacional**: YOLOv9-t + OC-SORT desenham caixas **só de pessoas**
+  e geram eventos com snapshot, sem abrir uma segunda conexão RTSP.
+- **Recortes laterais**: rostos aparecem na faixa esquerda do vídeo e placas de
+  veículos na direita, em fila; quando a faixa enche, os mais antigos saem.
 - Credenciais fora dos arquivos públicos, logs com senha redigida.
 - HLS com retenção limitada: segmentos antigos são apagados automaticamente.
 
@@ -20,11 +25,14 @@ no navegador. Feito para testar a ideia antes de integrar ao projeto **Central C
 | Python 3.10+ | servidor HTTP, supervisor e API (stdlib) | `python3 --version` |
 | FFmpeg com `libx264` e `aac` | decodificar HEVC e gerar HLS H.264/AAC | `ffmpeg -hide_banner -encoders \| grep -E "libx264|aac "` |
 | Navegador com MSE (Chrome/Edge/Firefox) ou HLS nativo (Safari) | reproduzir HLS | — |
+| `numpy` + `opencv-python-headless` | **opcional**: detecção YOLOv9 via OpenCV DNN | `python3 -c "import cv2, numpy; print(cv2.__version__)"` |
 
 O `hls.js` 1.5.17 já está vendorizado em `static/hls.min.js`; **não** é baixado em tempo
 de execução e não há dependência de CDN.
 
-Nada é instalado globalmente por este projeto. Se o FFmpeg não estiver presente:
+O viewer não instala nada globalmente. Para habilitar a detecção, instale as
+dependências locais com `pip install -r live_viewer/requirements.txt` (ou as do
+`requirements.txt` na raiz do Central). Se o FFmpeg não estiver presente:
 
 ```bash
 sudo apt install ffmpeg        # Ubuntu/Debian — requer sua autorização
@@ -35,27 +43,30 @@ sudo apt install ffmpeg        # Ubuntu/Debian — requer sua autorização
 ## 2. Estrutura
 
 ```
-yoosee_viewer/
+live_viewer/
 ├── app.py               # servidor HTTP, rotas, página, sinais, lock de instância
 ├── camera_manager.py    # config/segredos + supervisor (1 thread por câmera)
 ├── camera_store.py      # valida e grava câmeras adicionadas pela interface
 ├── ffmpeg_manager.py    # comando FFmpeg, processo, PID file, limpeza de órfãos
 ├── logging_utils.py     # log rotativo com redação de credenciais
-├── config.json          # câmeras e parâmetros HLS (sem senha)
+├── config.json          # câmeras, HLS e detecção (sem senha)
 ├── secrets.json         # senhas (modo 600, fora do que é servido)
+├── vision/              # YOLOv9 ONNX, rótulos COCO e OC-SORT
 ├── templates/index.html       # página com {{CAMERA_CARDS}}
 ├── templates/camera_card.html # markup de cada cartão (botões + logs)
-├── static/player.js     # player hls.js, polling de status, reconexão de UI
-├── static/cameras.js    # formulário "Adicionar câmera"
+├── static/player.js     # player hls.js, polling de status e overlay de detecções
+├── static/cameras.js    # formulários adicionar/renomear/remover câmera
 ├── static/style.css
 ├── static/hls.min.js    # biblioteca vendorizada
 ├── streams/<id>/        # playlist .m3u8 + segmentos .ts + .ffmpeg.pid
+├── models/              # yolov9t.onnx, baixado em runtime (gerado)
+├── events/<id>/         # events.jsonl + snapshots anotados (gerado)
 ├── logs/                # viewer.log + ffmpeg-<id>.log (rotativos)
-├── requirements.txt     # documenta "zero dependências Python"
+├── requirements.txt     # numpy + opencv-python-headless (só para a IA)
 └── start.sh
 ```
 
-`secrets.json`, `streams/*` e `logs/*` estão no `.gitignore`.
+`secrets.json`, `streams/*`, `logs/*`, `models/*` e `events/*` estão no `.gitignore`.
 
 ---
 
@@ -80,6 +91,53 @@ reiniciar o visualizador. A senha fica somente em `secrets.json` (permissão
 `600`) e nunca aparece na página nem em `config.json`. É possível adicionar
 uma de cada vez e testar antes de adicionar a próxima.
 
+### Removendo câmeras pela interface
+
+No cartão da câmera, clique em **Remover** e confirme. O viewer:
+
+1. apaga a câmera de `config.json` e a senha de `secrets.json` (somente se a
+   mesma chave de segredo não estiver sendo usada por outra câmera);
+2. encerra o supervisor/FFmpeg e a pasta `streams/<id>/` daquela câmera;
+3. encerra o worker de detecção e apaga `events/<id>/`.
+
+As outras câmeras seguem normais. A mesma operação está disponível via
+`POST /api/cameras/<id>/remove` (sem corpo). Se a câmera estiver temporariamente
+fora do ar, a remoção ainda funciona: a configuração é gravada antes da limpeza.
+
+### Câmera pública de teste (Copacabana)
+
+Já deixei cadastrada uma câmera pública brasileira em `config.json`:
+
+- **Id**: `pub-copacabana`
+- **Nome**: `Copacabana (pública)`
+- **Fonte**: `https://www.youtube.com/watch?v=A9Ztonz1Lgs` (Copacabana Posto 6,
+  Rio de Janeiro; a mesma câmera do link
+  `https://worldwatcher.live/cam/AYcY3pIV`)
+- **Link de referência**: <https://worldwatcher.live/cam/AYcY3pIV>
+
+Ela entra na lista como qualquer outra câmera: abre no player, recebe overlay de
+detecção e pode ser removida pelo botão **Remover**. O campo `source_url` faz o
+FFmpeg ler a transmissão pública em vez de montar um RTSP. Para YouTube, o
+`yt-dlp` resolve a URL HLS assinada; como essas URLs expiram, ela é resolvida de
+novo a cada reinício do stream (cache de 10 minutos). A fonte pública é
+**somente vídeo** (sem áudio) e exige internet no computador que roda o viewer.
+
+Para testar outra câmera pública, use **Adicionar câmera** e escolha
+**Câmera pública (YouTube ou link HLS)**: basta informar um nome e o link da
+transmissão ao vivo. Os campos RTSP são preenchidos automaticamente
+(`youtube.com:443`, usuário/senha `publico`, caminho `/`, TCP) só para manter o
+cadastro compatível com `config.json`; o acesso real usa apenas o `source_url`.
+Também dá para converter uma câmera existente clicando na **engrenagem** no topo
+direito do cartão (ao lado do badge de IA): o diálogo mostra todos os dados
+usados para acessá-la — nome, host, porta, usuário, senha, caminho RTSP,
+transporte, `source_url`, bitrates, FPS, ativação e IA — e todos podem ser
+editados, exceto o `id` e a chave interna do segredo. Trocar o `source_url` por
+outro link `https://www.youtube.com/watch?v=...` (de uma transmissão ao vivo)
+já aplica a mudança e reinicia o stream. Salvar também reconfigura a detecção daquela
+câmera. `yt-dlp` é dependência opcional, usada apenas quando existe `source_url`;
+sem ela, a câmera pública fica com erro, mas as câmeras RTSP e a IA das demais
+continuam normais.
+
 ### `config.json`
 
 ```json
@@ -92,6 +150,27 @@ uma de cada vez e testar antes de adicionar a próxima.
     "stall_timeout_seconds": 15,
     "start_grace_seconds": 12,
     "replay_minutes": 30
+  },
+  "detection": {
+    "enabled": true,
+    "model": "yolov9t.onnx",
+    "model_url": "https://huggingface.co/Kalray/yolov9/resolve/main/yolov9t.onnx",
+    "input_size": 640,
+    "confidence": 0.25,
+    "iou": 0.45,
+    "fps": 2.0,
+    "max_width": 960,
+    "classes": ["person"],
+    "max_age": 30,
+    "min_track_len": 1,
+    "event_cooldown_seconds": 60,
+    "snapshot": true,
+    "prefer_cuda": false,
+    "face_model": "face_detection_yunet_2023mar.onnx",
+    "face_model_url": "https://github.com/opencv/opencv_zoo/raw/main/models/face_detection_yunet/face_detection_yunet_2023mar.onnx",
+    "face_confidence": 0.65,
+    "crop_queue_size": 6,
+    "crop_attempts": 8
   },
   "cameras": [
     {
@@ -121,8 +200,28 @@ uma de cada vez e testar antes de adicionar a próxima.
 - `replay_minutes`: janela de replay desejada. **Máximo 30**; valores maiores são
   limitados a 30 e `0` desativa o replay. `playlist_size` continua sendo o mínimo de
   entradas ao vivo, mas é expandido automaticamente para cobrir a janela.
+- `detection`: veja detalhes abaixo. `enabled: false` desliga a IA em todas as
+  câmeras; `confidence` padrão é `0.25` e `fps` é a taxa de amostragem (não altera
+  o vídeo exibido). `classes` controla o que aparece no player — deixe apenas
+  `person` para esconder carros/motos.
+- `face_confidence`: corte do YuNet para aceitar um rosto. `crop_queue_size` é o
+  máximo de fotos por faixa lateral; `crop_attempts` quantas tentativas por track
+  antes de desistir daquele rosto/placa.
+- `detection_enabled`: opcional por câmera (`true`/`false`); quando ausente, usa
+  `detection.enabled`. Câmeras adicionadas pela interface também recebem um
+  worker de detecção automaticamente.
 - Várias câmeras: use o botão **+ Adicionar câmera** na interface ou adicione
   objetos em `cameras` com `id` único diretamente no arquivo.
+
+> **Modelos e eventos:** `models/yolov9t.onnx` (YOLO) e
+> `models/face_detection_yunet_2023mar.onnx` (YuNet, para rostos) são baixados uma
+> vez na primeira execução. Eventos deduplicados por `track_id`, snapshots
+> anotados, recortes `face_*.jpg` e `plate_*.jpg` ficam em `events/<id>/`. O
+> recorte de placa é uma heurística local (sem OCR) — ele tenta encontrar o
+> retângulo e salva a imagem para uso futuro, sem ler os caracteres. Se `cv2` ou
+> `numpy` não estiverem instalados, o viewer continua funcionando sem IA. O
+> modelo YOLO upstream é **AGPL-3.0** e não é incluído no pacote; YuNet e OC-SORT
+> são **Apache-2.0** e **MIT**, respectivamente.
 
 > **Espaço em disco:** com `video_bitrate` de `2500k`, 30 minutos ocupam cerca de
 > **560 MB por câmera** (≈ 0,31 MB/s). O FFmpeg apaga os segmentos fora da janela
@@ -150,8 +249,9 @@ Alternativa sem arquivo: `YV_SECRET_CAMERA_190_PASSWORD=... ./start.sh`
 ## 4. Executar
 
 ```bash
-cd /home/leonardo/yoosee_viewer
+cd live_viewer
 ./start.sh
+# ou, na raiz do Central, use python app.py (o viewer sobe como sidecar)
 # ou: python3 app.py
 ```
 
@@ -175,6 +275,15 @@ Rotas úteis:
 | `GET /` | página do player |
 | `GET /healthz` | health check com estado resumido |
 | `GET /api/status` | JSON detalhado por câmera (estado, PID, idades, restarts, janela de replay) |
+| `GET /api/cameras/<id>` | configuração completa da câmera, inclusive senha, para edição |
+| `GET /api/detections` | estado da IA por câmera (caixas, contadores, erro do modelo) |
+| `GET /api/detections/<id>` | estado de detecção de uma câmera |
+| `GET /api/events?camera=<id>&limit=50` | eventos recentes deduplicados, com URL do snapshot |
+| `GET /events/<id>/<arquivo>.jpg` | snapshot anotado, recorte `face_*.jpg` ou `plate_*.jpg` |
+| `POST /api/cameras` | cadastra uma câmera (JSON) e inicia stream + IA (201) |
+| `POST /api/cameras/<id>/rename` | altera o nome amigável (JSON) |
+| `POST /api/cameras/<id>/update` | salva a configuração editada e reinicia o stream (JSON) |
+| `POST /api/cameras/<id>/remove` | remove a câmera, stream, IA, senha e eventos |
 | `POST /api/cameras/<id>/restart` | reinicia o stream daquela câmera (202) |
 | `GET /streams/<id>/stream.m3u8` | playlist HLS |
 | `GET /streams/<id>/seg_*.ts` | segmentos (suporta `Range`) |
@@ -202,6 +311,19 @@ Rotas úteis:
 7. Na inicialização, um PID file órfão só é encerrado se o `/proc/<pid>/cmdline`
    apontar para o diretório desta câmera neste projeto — nunca mata processo alheio.
 8. Latência típica no navegador: **~4–6 s** (natureza do HLS).
+9. Quando `detection.enabled` está ativo, um worker por câmera lê essa mesma
+   playlist HLS com FFmpeg em `fps` amostras/segundo (padrão `2`) e redimensiona
+   para `max_width` (padrão `960`) antes da inferência. Não há conexão RTSP extra.
+10. Cada frame passa por letterbox → YOLOv9-t ONNX (`cv2.dnn`) → NMS por classe →
+    OC-SORT. Só as caixas de `person` são publicadas em `/api/detections` e
+    desenhadas (sem texto/percentual) em um `<canvas>` sobre o `<video>`.
+11. Em paralelo, YuNet procura rostos dentro das caixas de pessoas e uma
+    heurística de contornos procura placas dentro das caixas de veículos. Os
+    recortes viram `face_*.jpg`/`plate_*.jpg` e alimentam as filas esquerda/direita
+    do player; quando a fila passa de `crop_queue_size`, o mais antigo é apagado.
+12. Uma pessoa nova (`track_id` ainda não visto) gera no máximo um evento por
+    `event_cooldown_seconds`, com snapshot anotada em `events/<id>/`. O overlay
+    some se o estado ficar parado por mais de 6 s.
 
 ### Replay no navegador
 
@@ -229,6 +351,12 @@ que existe de fato. Durante o replay a escala da barra fica fixa: o cursor não
 - Se a senha já foi exposta em chat/terminal/histórico, **troque a senha da câmera**.
 - CSP restritiva, `nosniff`, `no-referrer`, `X-Frame-Options: SAMEORIGIN`, sem CORS.
 - A página e o `/api/status` nunca incluem a senha (a URL é exibida como `admin:***`).
+- Snapshots, rostos e placas em `events/<id>/` são servidos por HTTP sem
+  autenticação, assim como os segmentos HLS. Mantenha o viewer em rede confiável;
+  desative `detection.snapshot` se não quiser guardar imagens.
+- Rostos/placas são só recortes locais: **não há reconhecimento facial, OCR nem
+  banco de identidades**. Use essa função apenas onde você tenha autorização para
+  monitorar o local.
 
 ---
 
@@ -257,6 +385,9 @@ câmera `10.0.0.190` em `/onvif1` UDP.
 | Shutdown (SIGTERM) | ✅ app e FFmpeg encerrados, porta liberada, 0 órfãos |
 | Rotas sensíveis | ✅ `/secrets.json`, `.ffmpeg.pid`, `../` → 404 |
 | Vazamento de senha | ✅ 0 ocorrências em HTML/JS/HLS/logs; logs mostram `admin:***` |
+| YOLOv9-t + OC-SORT em imagem real | ✅ tracks estáveis; player mostra só `person` |
+| `DetectionManager` com HLS sintético | ✅ worker ativo, caixas de pessoas publicadas, evento com snapshot anotada |
+| Recorte de placa | ✅ detectado em imagem sintética de veículo com placa |
 
 Observação: o firmware envia pacotes RTP perdidos e NALUs HEVC inválidos
 (`missed packets`, `PPS id out of range`). São avisos do FFmpeg; a imagem
@@ -276,40 +407,49 @@ permanece estável e o supervisor só reinicia em stall real (15 s).
   Reduza `replay_minutes` ou `video_bitrate` se o espaço for apertado.
 - Se a câmera ficar offline por mais de 30 min, o histórico antigo é descartado na
   reconexão (não há conteúdo dentro da janela para preservar).
+- A detecção roda em CPU por padrão e consome CPU extra por câmera; reduza `fps`,
+  `max_width` e `input_size` se necessário, ou use `prefer_cuda` com um OpenCV
+  compatível. Sem `numpy`/`opencv-python-headless`, a IA é ignorada.
+- O modelo é treinado em COCO: pode confundir pessoas com objetos parecidos.
+  `confidence` e `event_cooldown_seconds` servem para ajustar falsos positivos.
+- YuNet precisa de rosto razoavelmente visível: em câmeras muito distantes ou com
+  pessoas de costas, a faixa de rostos pode ficar vazia. A placa é apenas um
+  recorte heurístico (sem OCR), então pode errar ou não encontrar em movimento.
+- A estimativa de velocidade dos veículos ainda não está implementada; os
+  recortes de placa ficam salvos para servir de base a essa etapa futura.
 - Sem autenticação de usuários; é um visualizador local.
 
 ---
 
-## 9. Integração futura com o Central Cameras (Flask)
+## 9. Integração com o Central Cameras (Flask)
 
-O viewer foi mantido desacoplado de propósito. Opções:
+O viewer já vive em `live_viewer/` dentro do Central e sobe como sidecar a partir
+do `app.py` da raiz. O Flask faz proxy de `/`, `/api/*`, `/events/*` e
+`/streams/*` em `/ao-vivo`, repassando `X-Forwarded-Prefix: /ao-vivo`; por isso
+as URLs relativas do player continuam funcionando.
 
-1. **Rodar como serviço separado** (recomendado): o Flask faz proxy/iframe para
-   `http://127.0.0.1:8088/` ou consome `/api/status`, mantendo o FFmpeg fora do
-   processo web. Vantagem: reinício do Flask não derruba o vídeo.
-2. **Importar os módulos**: `CameraManager` não depende de Flask; pode ser
-   instanciado no `app.py` do Flask. Nesse caso, garanta `manager.stop()` no shutdown.
-3. **Reaproveitar só o front-end**: `templates/index.html` + `static/player.js`
-   esperam cartões com `data-camera` e `data-hls`, e o endpoint `/api/status`.
+- `CameraManager`, `DetectionManager`, os FFmpeg e os workers de IA rodam no
+  processo do viewer, nunca por worker web. Reiniciar o Flask não derruba o
+  vídeo se o viewer já estiver no ar.
+- As classes Python não dependem de Flask e podem ser usadas de forma
+  autônoma; basta garantir `manager.stop()` e `detection.stop()` no shutdown.
+- Câmeras adicionadas ou renomeadas pela interface são refletidas também no
+  detector, sem reiniciar o viewer.
+- `secrets.json` continua fora das rotas públicas e o lock de instância evita
+  duplicar FFmpeg/detecção.
 
-Pontos de atenção na integração:
-- não servir `secrets.json` pelo Flask;
-- manter o lock de instância para não duplicar FFmpeg;
-- se usar Gunicorn/uWSGI com múltiplos workers, o supervisor deve rodar em **um**
-  processo dedicado (ou fora do servidor web), nunca por worker.
-
-Serviço systemd de exemplo (opcional):
+Serviço systemd de exemplo (opcional, para rodar fora do Central):
 
 ```ini
 [Unit]
-Description=LYSec Play | Live Viewer (RTSP -> HLS)
+Description=LYSec Play | Live Viewer (RTSP -> HLS + visão computacional)
 After=network-online.target
 
 [Service]
 Type=simple
 User=leonardo
-WorkingDirectory=/home/leonardo/yoosee_viewer
-ExecStart=/usr/bin/python3 /home/leonardo/yoosee_viewer/app.py
+WorkingDirectory=/caminho/para/central_cameras/live_viewer
+ExecStart=/usr/bin/python3 /caminho/para/central_cameras/live_viewer/app.py
 Restart=on-failure
 RestartSec=5
 KillSignal=SIGTERM
@@ -327,6 +467,10 @@ WantedBy=multi-user.target
 # estado e saúde
 curl -s http://127.0.0.1:8088/healthz
 curl -s http://127.0.0.1:8088/api/status
+
+# visão computacional
+curl -s http://127.0.0.1:8088/api/detections
+curl -s 'http://127.0.0.1:8088/api/events?camera=yoosee-190&limit=10'
 
 # playlist e codecs (a URL não contém credenciais)
 curl -s http://127.0.0.1:8088/streams/yoosee-190/stream.m3u8

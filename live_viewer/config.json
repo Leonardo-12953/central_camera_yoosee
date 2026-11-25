@@ -11,6 +11,29 @@
     "start_grace_seconds": 12,
     "replay_minutes": 30
   },
+  "detection": {
+    "enabled": true,
+    "model": "yolov9t.onnx",
+    "model_url": "https://huggingface.co/Kalray/yolov9/resolve/main/yolov9t.onnx",
+    "input_size": 640,
+    "confidence": 0.25,
+    "iou": 0.45,
+    "fps": 2.0,
+    "max_width": 960,
+    "classes": [
+      "person"
+    ],
+    "max_age": 30,
+    "min_track_len": 1,
+    "event_cooldown_seconds": 60,
+    "snapshot": true,
+    "prefer_cuda": false,
+    "face_model": "face_detection_yunet_2023mar.onnx",
+    "face_model_url": "https://github.com/opencv/opencv_zoo/raw/main/models/face_detection_yunet/face_detection_yunet_2023mar.onnx",
+    "face_confidence": 0.65,
+    "crop_queue_size": 6,
+    "crop_attempts": 8
+  },
   "cameras": [
     {
       "id": "yoosee-190",
@@ -43,6 +66,41 @@
       "video_bitrate": "2500k",
       "audio_bitrate": "64k",
       "input_fps": 15
+    },
+    {
+      "id": "pub-copacabana",
+      "name": "Copacabana (pública)",
+      "host": "youtube.com",
+      "port": 443,
+      "username": "publico",
+      "secret": "camera_pub_copacabana_password",
+      "path": "/",
+      "transport": "tcp",
+      "enabled": true,
+      "output_width": 960,
+      "output_height": 0,
+      "video_bitrate": "2500k",
+      "audio_bitrate": "64k",
+      "input_fps": 15,
+      "detection_enabled": true,
+      "source_url": "https://www.youtube.com/watch?v=A9Ztonz1Lgs"
+    },
+    {
+      "id": "cam-youtube-com",
+      "name": "Teste",
+      "host": "youtube.com",
+      "port": 443,
+      "username": "publico",
+      "secret": "camera_cam_youtube_com_password",
+      "path": "/",
+      "transport": "tcp",
+      "enabled": true,
+      "output_width": 1280,
+      "output_height": 0,
+      "video_bitrate": "2500k",
+      "audio_bitrate": "64k",
+      "input_fps": 15,
+      "source_url": "https://www.youtube.com/watch?v=EO_1LWqsCNE"
     }
   ]
 }

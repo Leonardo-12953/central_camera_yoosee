@@ -12,6 +12,7 @@ import stat
 import tempfile
 import threading
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from camera_manager import CameraSpec, ConfigError
 
@@ -22,6 +23,7 @@ _USER_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 _PATH_RE = re.compile(r"^/[A-Za-z0-9._~%?=&+\-/]*$")
 _BITRATE_RE = re.compile(r"^[1-9][0-9]{0,4}[kKmM]$")
 _ID_SAFE_RE = re.compile(r"[^A-Za-z0-9_-]+")
+_ID_VALID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 
 
 def _text(payload: dict, key: str, label: str, maximum: int,
@@ -112,27 +114,53 @@ def _atomic_write_json(path: Path, data: dict, mode: int) -> None:
             os.unlink(temp_name)
 
 
-def remove_camera(config_path: Path, secrets_path: Path,
-                  camera_id: str, secret: str) -> None:
-    """Desfaz um cadastro que não chegou a iniciar o supervisor da câmera."""
+def remove_camera(config_path: Path, secrets_path: Path, camera_id: str) -> str:
+    """Remove uma câmera do config e apaga a senha associada.
+
+    Devolve o nome da chave de segredo removida (vazio se a câmera não tinha
+    segredo próprio). A chave só é apagada quando nenhuma outra câmera ainda a
+    referencia.
+    """
+    if not _ID_VALID_RE.fullmatch(camera_id):
+        raise ConfigError("Identificador da câmera inválido.")
     with _WRITE_LOCK:
         config_raw = _read_json(config_path, "config.json")
-        secrets_raw = _read_json(secrets_path, "secrets.json", optional=True)
         cameras = config_raw.get("cameras")
-        if isinstance(cameras, list):
-            config_raw["cameras"] = [
-                item for item in cameras
-                if not (isinstance(item, dict) and item.get("id") == camera_id)
-            ]
-        secrets_raw.pop(secret, None)
+        if not isinstance(cameras, list):
+            raise ConfigError("config.json não contém uma lista de câmeras.")
+        removed = next(
+            (item for item in cameras
+             if isinstance(item, dict) and item.get("id") == camera_id),
+            None,
+        )
+        if removed is None:
+            raise ConfigError("Câmera não encontrada.")
+
+        secret = str(removed.get("secret") or "").strip()
+        remaining = [
+            item for item in cameras
+            if not (isinstance(item, dict) and item.get("id") == camera_id)
+        ]
+        config_raw["cameras"] = remaining
+
+        secrets_raw = _read_json(secrets_path, "secrets.json", optional=True)
+        secret_in_use = any(
+            isinstance(item, dict) and str(item.get("secret") or "").strip() == secret
+            for item in remaining
+        )
+        if secret and not secret_in_use:
+            secrets_raw.pop(secret, None)
 
         config_mode = 0o644
         try:
             config_mode = stat.S_IMODE(config_path.stat().st_mode)
         except OSError:
             pass
-        _atomic_write_json(secrets_path, secrets_raw, 0o600)
+        # Config primeiro: se falhar a gravação dos segredos, sobra no máximo
+        # uma chave órfã (inofensiva), nunca uma câmera sem senha.
         _atomic_write_json(config_path, config_raw, config_mode)
+        _atomic_write_json(secrets_path, secrets_raw, 0o600)
+        return secret
 
 
 def rename_camera(config_path: Path, camera_id: str, new_name: str) -> None:
@@ -160,31 +188,98 @@ def rename_camera(config_path: Path, camera_id: str, new_name: str) -> None:
         _atomic_write_json(config_path, config_raw, config_mode)
 
 
-def add_camera(config_path: Path, secrets_path: Path, payload: dict,
-               existing_ids: set[str]) -> tuple[CameraSpec, str]:
-    """Grava uma nova câmera e devolve (spec, senha) para iniciá-la já."""
+def _bool_setting(payload: dict, key: str, label: str, default):
+    value = payload.get(key, default)
+    if value is None or value == "":
+        return None
+    if isinstance(value, bool):
+        return value
+    text = str(value).strip().lower()
+    if text in {"1", "true", "yes", "on"}:
+        return True
+    if text in {"0", "false", "no", "off"}:
+        return False
+    raise ConfigError(f"{label} deve ser verdadeiro ou falso.")
+
+
+def _validate_camera_fields(payload: dict, password_required: bool) -> dict:
+    """Valida os campos editáveis; senha em branco = manter a atual."""
     if not isinstance(payload, dict):
         raise ConfigError("Dados da câmera inválidos.")
 
+    source_type = str(payload.get("source_type") or "").strip().lower()
+    if source_type not in {"", "rtsp", "public"}:
+        raise ConfigError("Tipo de câmera inválido.")
+    source_url = _text(payload, "source_url", "URL da fonte", 500)
+    if source_type == "public" and not source_url:
+        raise ConfigError("Informe o link da transmissão pública.")
+    if source_url:
+        parsed = urlsplit(source_url)
+        if (parsed.scheme not in {"http", "https"} or not parsed.netloc
+                or any(char.isspace() for char in source_url)):
+            raise ConfigError(
+                "URL da fonte inválida (use http:// ou https://, sem espaços)."
+            )
+    # Câmera pública não usa RTSP: os campos abaixo viram apenas cadastro.
+    is_public = source_type == "public" or bool(source_url)
+
     name = _text(payload, "name", "Nome da câmera", 80, required=True)
-    host = _text(payload, "host", "IP ou endereço da câmera", 253, required=True)
+    host = _text(
+        payload, "host", "IP ou endereço da câmera", 253,
+        default="youtube.com" if is_public else "", required=not is_public,
+    )
     if not _HOST_RE.fullmatch(host):
         raise ConfigError(
             "IP ou endereço inválido. Use um IPv4 ou um nome como 'camera.local'."
         )
-    port = _integer(payload, "port", "Porta RTSP", 554, 1, 65535)
-    username = _text(payload, "username", "Usuário", 64, default="admin", required=True)
+    port = _integer(payload, "port", "Porta RTSP", 443 if is_public else 554, 1, 65535)
+    username = _text(
+        payload, "username", "Usuário", 64,
+        default="publico" if is_public else "admin", required=True,
+    )
     if not _USER_RE.fullmatch(username):
         raise ConfigError("Usuário inválido (use letras, números, ponto, _ ou -).")
-    password = _text(payload, "password", "Senha", 200, required=True)
 
-    path = _text(payload, "path", "Caminho RTSP", 200, default="/onvif1", required=True)
+    raw_password = payload.get("password", "")
+    if raw_password is None:
+        raw_password = ""
+    if not isinstance(raw_password, str):
+        raise ConfigError("Senha deve ser um texto.")
+    if len(raw_password) > 200:
+        raise ConfigError("Senha é muito longa (máximo de 200 caracteres).")
+    if any(ord(char) < 32 or ord(char) == 127 for char in raw_password):
+        raise ConfigError("Senha contém caracteres inválidos.")
+    # Não se faz strip na senha: espaços podem fazer parte dela.
+    if not password_required:
+        password = None if not raw_password.strip() else raw_password
+    elif not raw_password.strip():
+        if is_public:
+            password = "publico"
+        else:
+            raise ConfigError("Informe a senha.")
+    else:
+        password = raw_password
+
+    path = _text(
+        payload, "path", "Caminho RTSP", 200,
+        default="/" if is_public else "/onvif1", required=True,
+    )
     if not _PATH_RE.fullmatch(path):
         raise ConfigError("Caminho RTSP inválido (deve começar com '/' e sem espaços).")
 
-    transport = str(payload.get("transport", "udp") or "udp").strip().lower()
+    transport = str(
+        payload.get("transport", "tcp" if is_public else "udp")
+        or ("tcp" if is_public else "udp")
+    ).strip().lower()
     if transport not in {"udp", "tcp"}:
         raise ConfigError("Transporte deve ser UDP ou TCP.")
+
+    enabled = _bool_setting(payload, "enabled", "Câmera ativada", True)
+    if enabled is None:
+        enabled = True
+    detection_enabled = _bool_setting(
+        payload, "detection_enabled", "Detecção por IA", None
+    )
 
     output_width = _integer(payload, "output_width", "Largura", 1280, 320, 4096)
     output_height = _integer(payload, "output_height", "Altura", 0, 0, 4096)
@@ -194,6 +289,51 @@ def add_camera(config_path: Path, secrets_path: Path, payload: dict,
     for label, value in (("Bitrate de vídeo", video_bitrate), ("Bitrate de áudio", audio_bitrate)):
         if not value or not _BITRATE_RE.fullmatch(value):
             raise ConfigError(f"{label} inválido (exemplo: 2500k).")
+
+    return {
+        "name": name,
+        "host": host,
+        "port": port,
+        "username": username,
+        "password": password,
+        "path": path,
+        "transport": transport,
+        "enabled": enabled,
+        "output_width": output_width,
+        "output_height": output_height,
+        "video_bitrate": video_bitrate,
+        "audio_bitrate": audio_bitrate,
+        "input_fps": input_fps,
+        "detection_enabled": detection_enabled,
+        "source_url": source_url,
+    }
+
+
+def _camera_spec(camera_id: str, secret: str, fields: dict) -> CameraSpec:
+    return CameraSpec(
+        id=camera_id,
+        secret=secret,
+        name=fields["name"],
+        host=fields["host"],
+        port=fields["port"],
+        username=fields["username"],
+        path=fields["path"],
+        transport=fields["transport"],
+        enabled=fields["enabled"],
+        output_width=fields["output_width"],
+        output_height=fields["output_height"],
+        video_bitrate=fields["video_bitrate"],
+        audio_bitrate=fields["audio_bitrate"],
+        input_fps=fields["input_fps"],
+        detection_enabled=fields["detection_enabled"],
+        source_url=fields["source_url"],
+    )
+
+
+def add_camera(config_path: Path, secrets_path: Path, payload: dict,
+               existing_ids: set[str]) -> tuple[CameraSpec, str]:
+    """Grava uma nova câmera e devolve (spec, senha) para iniciá-la já."""
+    fields = _validate_camera_fields(payload, password_required=True)
 
     with _WRITE_LOCK:
         config_raw = _read_json(config_path, "config.json")
@@ -209,27 +349,32 @@ def add_camera(config_path: Path, secrets_path: Path, payload: dict,
             for item in cameras
             if isinstance(item, dict)
         )
-        camera_id = _new_camera_id(host, ids)
+        camera_id = _new_camera_id(fields["host"], ids)
         secret = _secret_key(camera_id)
 
-        cameras.append({
+        entry = {
             "id": camera_id,
-            "name": name,
-            "host": host,
-            "port": port,
-            "username": username,
+            "name": fields["name"],
+            "host": fields["host"],
+            "port": fields["port"],
+            "username": fields["username"],
             "secret": secret,
-            "path": path,
-            "transport": transport,
-            "enabled": True,
-            "output_width": output_width,
-            "output_height": output_height,
-            "video_bitrate": video_bitrate,
-            "audio_bitrate": audio_bitrate,
-            "input_fps": input_fps,
-        })
+            "path": fields["path"],
+            "transport": fields["transport"],
+            "enabled": fields["enabled"],
+            "output_width": fields["output_width"],
+            "output_height": fields["output_height"],
+            "video_bitrate": fields["video_bitrate"],
+            "audio_bitrate": fields["audio_bitrate"],
+            "input_fps": fields["input_fps"],
+        }
+        if fields["detection_enabled"] is not None:
+            entry["detection_enabled"] = fields["detection_enabled"]
+        if fields["source_url"]:
+            entry["source_url"] = fields["source_url"]
+        cameras.append(entry)
         config_raw["cameras"] = cameras
-        secrets_raw[secret] = password
+        secrets_raw[secret] = fields["password"]
 
         config_mode = 0o644
         try:
@@ -242,20 +387,74 @@ def add_camera(config_path: Path, secrets_path: Path, payload: dict,
         _atomic_write_json(secrets_path, secrets_raw, 0o600)
         _atomic_write_json(config_path, config_raw, config_mode)
 
-    spec = CameraSpec(
-        id=camera_id,
-        name=name,
-        host=host,
-        port=port,
-        username=username,
-        secret=secret,
-        path=path,
-        transport=transport,
-        enabled=True,
-        output_width=output_width,
-        output_height=output_height,
-        video_bitrate=video_bitrate,
-        audio_bitrate=audio_bitrate,
-        input_fps=input_fps,
-    )
-    return spec, password
+    return _camera_spec(camera_id, secret, fields), fields["password"]
+
+
+def update_camera(config_path: Path, secrets_path: Path, camera_id: str,
+                  payload: dict) -> tuple[CameraSpec, str]:
+    """Atualiza uma câmera existente e devolve (spec, senha) para o runtime.
+
+    O `id` e a chave `secret` são preservados — trocar o id exigiria recriar
+    streams, eventos e senhas. A senha fica em branco no payload quando o
+    usuário não quer alterá-la.
+    """
+    if not _ID_VALID_RE.fullmatch(camera_id):
+        raise ConfigError("Identificador da câmera inválido.")
+    fields = _validate_camera_fields(payload, password_required=False)
+
+    with _WRITE_LOCK:
+        config_raw = _read_json(config_path, "config.json")
+        cameras = config_raw.get("cameras")
+        if not isinstance(cameras, list):
+            raise ConfigError("config.json não contém uma lista de câmeras.")
+        item = next(
+            (entry for entry in cameras
+             if isinstance(entry, dict) and entry.get("id") == camera_id),
+            None,
+        )
+        if item is None:
+            raise ConfigError("Câmera não encontrada.")
+
+        secret = str(item.get("secret") or "").strip()
+        if not secret:
+            raise ConfigError("Câmera sem chave de segredo válida.")
+        secrets_raw = _read_json(secrets_path, "secrets.json", optional=True)
+        password = fields["password"]
+        if password is None:
+            password = str(secrets_raw.get(secret, "") or "")
+        if not password:
+            raise ConfigError("Informe a senha da câmera.")
+
+        item.update({
+            "name": fields["name"],
+            "host": fields["host"],
+            "port": fields["port"],
+            "username": fields["username"],
+            "path": fields["path"],
+            "transport": fields["transport"],
+            "enabled": fields["enabled"],
+            "output_width": fields["output_width"],
+            "output_height": fields["output_height"],
+            "video_bitrate": fields["video_bitrate"],
+            "audio_bitrate": fields["audio_bitrate"],
+            "input_fps": fields["input_fps"],
+        })
+        if fields["detection_enabled"] is None:
+            item.pop("detection_enabled", None)
+        else:
+            item["detection_enabled"] = fields["detection_enabled"]
+        if fields["source_url"]:
+            item["source_url"] = fields["source_url"]
+        else:
+            item.pop("source_url", None)
+        secrets_raw[secret] = password
+
+        config_mode = 0o644
+        try:
+            config_mode = stat.S_IMODE(config_path.stat().st_mode)
+        except OSError:
+            pass
+        _atomic_write_json(secrets_path, secrets_raw, 0o600)
+        _atomic_write_json(config_path, config_raw, config_mode)
+
+    return _camera_spec(camera_id, secret, fields), password

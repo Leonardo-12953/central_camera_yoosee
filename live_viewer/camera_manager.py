@@ -10,6 +10,7 @@ import logging
 import os
 import random
 import re
+import shutil
 import socket
 import stat
 import threading
@@ -19,6 +20,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from ffmpeg_manager import FFmpegProcess, cleanup_stale_pidfile
+from vision.coco import COCO_LABELS, DEFAULT_CLASSES
 
 ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 
@@ -27,6 +29,35 @@ RESTART_REASON = "Reinício solicitado pela interface"
 
 class ConfigError(RuntimeError):
     pass
+
+
+@dataclass(frozen=True)
+class DetectionConfig:
+    """Parâmetros globais de visão computacional (visão = detecção + rastreio)."""
+
+    enabled: bool = True
+    model: str = "yolov9t.onnx"
+    model_url: str = "https://huggingface.co/Kalray/yolov9/resolve/main/yolov9t.onnx"
+    input_size: int = 640
+    confidence: float = 0.25
+    iou: float = 0.45
+    fps: float = 2.0
+    max_width: int = 960
+    classes: tuple[int, ...] = (0, 1, 2, 3, 5, 7)
+    max_age: int = 30
+    min_track_len: int = 1
+    event_cooldown_seconds: int = 60
+    snapshot: bool = True
+    prefer_cuda: bool = False
+    # Recortes laterais: rosto (YuNet) e placa (heurística dentro do veículo).
+    face_model: str = "face_detection_yunet_2023mar.onnx"
+    face_model_url: str = (
+        "https://github.com/opencv/opencv_zoo/raw/main/models/"
+        "face_detection_yunet/face_detection_yunet_2023mar.onnx"
+    )
+    face_confidence: float = 0.65
+    crop_queue_size: int = 6
+    crop_attempts: int = 8
 
 
 @dataclass(frozen=True)
@@ -45,8 +76,15 @@ class CameraSpec:
     video_bitrate: str = "2500k"
     audio_bitrate: str = "64k"
     input_fps: int = 15
+    # None = usa o valor global de detection.enabled.
+    detection_enabled: bool | None = None
+    # URL pública (YouTube/HLS) no lugar do RTSP; host/port seguem só para o cadastro.
+    source_url: str = ""
 
     def safe_url(self) -> str:
+        if self.source_url:
+            from source_resolver import display_url
+            return display_url(self.source_url)
         return (f"rtsp://{self.username}:***@{self.host}:{self.port}{self.path}")
 
 
@@ -85,7 +123,89 @@ def _positive_int(value, default, where):
     return number
 
 
-def load_config(path: Path) -> tuple[ServerConfig, HlsConfig, list[CameraSpec]]:
+def _as_bool(value, default: bool, where: str) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    text = str(value).strip().lower()
+    if text in {"1", "true", "yes", "on"}:
+        return True
+    if text in {"0", "false", "no", "off"}:
+        return False
+    raise ConfigError(f"{where} deve ser verdadeiro ou falso")
+
+
+def _as_float(value, default: float, where: str, minimum: float, maximum: float) -> float:
+    if value is None:
+        return default
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        raise ConfigError(f"{where} deve ser um número") from None
+    if not minimum <= number <= maximum:
+        raise ConfigError(f"{where} deve estar entre {minimum} e {maximum}")
+    return number
+
+
+def _parse_classes(value, where: str) -> tuple[int, ...]:
+    if value is None:
+        return tuple(DEFAULT_CLASSES)
+    if not isinstance(value, list) or not value:
+        raise ConfigError(f"{where} deve ser uma lista de classes")
+    names = {name.lower(): index for index, name in enumerate(COCO_LABELS)}
+    classes: set[int] = set()
+    for item in value:
+        if isinstance(item, bool):
+            raise ConfigError(f"{where} contém um valor inválido")
+        if isinstance(item, int) and 0 <= item < len(COCO_LABELS):
+            classes.add(item)
+            continue
+        if isinstance(item, str):
+            index = names.get(item.strip().lower())
+            if index is not None:
+                classes.add(index)
+                continue
+        raise ConfigError(f"{where} contém '{item}', que não é uma classe COCO válida")
+    return tuple(sorted(classes))
+
+
+def _detection_config(raw) -> DetectionConfig:
+    value = raw if isinstance(raw, dict) else {}
+    return DetectionConfig(
+        enabled=_as_bool(value.get("enabled"), True, "detection.enabled"),
+        model=str(value.get("model") or "yolov9t.onnx"),
+        model_url=str(value.get("model_url") or DetectionConfig.model_url),
+        input_size=_positive_int(value.get("input_size"), 640, "detection.input_size"),
+        confidence=_as_float(value.get("confidence"), 0.25, "detection.confidence", 0.01, 0.99),
+        iou=_as_float(value.get("iou"), 0.45, "detection.iou", 0.01, 0.99),
+        fps=_as_float(value.get("fps"), 2.0, "detection.fps", 0.2, 10.0),
+        max_width=_positive_int(value.get("max_width"), 960, "detection.max_width"),
+        classes=_parse_classes(value.get("classes"), "detection.classes"),
+        max_age=_positive_int(value.get("max_age"), 30, "detection.max_age"),
+        min_track_len=_positive_int(value.get("min_track_len"), 1, "detection.min_track_len"),
+        event_cooldown_seconds=_positive_int(
+            value.get("event_cooldown_seconds"), 60, "detection.event_cooldown_seconds"
+        ),
+        snapshot=_as_bool(value.get("snapshot"), True, "detection.snapshot"),
+        prefer_cuda=_as_bool(value.get("prefer_cuda"), False, "detection.prefer_cuda"),
+        face_model=str(value.get("face_model") or DetectionConfig.face_model),
+        face_model_url=str(value.get("face_model_url") or DetectionConfig.face_model_url),
+        face_confidence=_as_float(
+            value.get("face_confidence"), 0.65, "detection.face_confidence", 0.05, 0.99
+        ),
+        crop_queue_size=_positive_int(
+            value.get("crop_queue_size"), 6, "detection.crop_queue_size"
+        ),
+        crop_attempts=_positive_int(
+            value.get("crop_attempts"), 8, "detection.crop_attempts"
+        ),
+    )
+
+
+def load_config(path: Path) -> tuple[ServerConfig, HlsConfig, DetectionConfig, list[CameraSpec]]:
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
     except OSError as exc:
@@ -184,8 +304,13 @@ def load_config(path: Path) -> tuple[ServerConfig, HlsConfig, list[CameraSpec]]:
             video_bitrate=str(item.get("video_bitrate", "2500k")),
             audio_bitrate=str(item.get("audio_bitrate", "64k")),
             input_fps=max(1, int(item.get("input_fps", 15))),
+            detection_enabled=(
+                None if "detection_enabled" not in item
+                else _as_bool(item.get("detection_enabled"), True, f"{where}.detection_enabled")
+            ),
+            source_url=str(item.get("source_url", "") or "").strip(),
         ))
-    return server, hls, cameras
+    return server, hls, _detection_config(raw.get("detection")), cameras
 
 
 def load_secrets(path: Path, logger: logging.Logger) -> dict[str, str]:
@@ -300,6 +425,8 @@ class CameraRuntime:
         self.updated_at = time.time()
         self.lock = threading.Lock()
         self.thread: threading.Thread | None = None
+        # Sinal exclusivo desta câmera: permite removê-la sem parar as outras.
+        self.stop_requested = threading.Event()
 
     def set_state(self, state: str, message: str) -> None:
         with self.lock:
@@ -517,6 +644,41 @@ class CameraManager:
             runtime.spec = new_spec
             return new_spec
 
+    def update_camera(self, camera_id: str, spec: CameraSpec,
+                      password: str) -> bool:
+        """Aplica uma configuração editada e pede o reinício do stream."""
+        with self._runtimes_lock:
+            runtime = self.runtimes.get(camera_id)
+            if runtime is None:
+                return False
+            runtime.spec = spec
+            runtime.password = password
+        runtime.set_state("reconnecting", "Configuração atualizada; reiniciando")
+        return self.request_restart(camera_id)
+
+    def remove_camera(self, camera_id: str) -> bool:
+        """Encerra o supervisor/FFmpeg de uma câmera e apaga seus arquivos HLS."""
+        with self._runtimes_lock:
+            runtime = self.runtimes.pop(camera_id, None)
+            if runtime is None:
+                return False
+            runtime.stop_requested.set()
+            thread = runtime.thread
+
+        if (thread is not None and thread.is_alive()
+                and thread is not threading.current_thread()):
+            thread.join(timeout=10)
+
+        with runtime.lock:
+            proc = runtime.proc
+        if proc is not None:
+            proc.stop()
+            runtime.clear_proc()
+        runtime.note_disconnected()
+        shutil.rmtree(self.base_dir / "streams" / camera_id, ignore_errors=True)
+        self.logger.info("câmera %s removida; supervisor encerrado", camera_id)
+        return True
+
     def start(self) -> None:
         with self._runtimes_lock:
             runtimes = list(self.runtimes.values())
@@ -578,12 +740,18 @@ class CameraManager:
         """
         end = time.time() + seconds
         while time.time() < end and not self.stop_event.is_set():
-            if runtime is not None and self._consume_restart(runtime):
-                return True
+            if runtime is not None:
+                if runtime.stop_requested.is_set():
+                    return False
+                if self._consume_restart(runtime):
+                    return True
             time.sleep(0.2)
         return False
 
     def _reachable(self, spec: CameraSpec) -> bool:
+        if spec.source_url:
+            # A fonte pública é HTTP(S); quem testa a conexão é o próprio FFmpeg.
+            return True
         try:
             with socket.create_connection((spec.host, spec.port), timeout=3):
                 return True
@@ -591,9 +759,11 @@ class CameraManager:
             return False
 
     def _supervise(self, runtime: CameraRuntime) -> None:
-        spec = runtime.spec
         backoff = 1.0
-        while not self.stop_event.is_set():
+        while not (self.stop_event.is_set() or runtime.stop_requested.is_set()):
+            # Relê a spec a cada volta: a edição pela interface troca runtime.spec
+            # e pede reinício, então o próximo FFmpeg já usa os novos dados.
+            spec = runtime.spec
             # Reconhece cliques que chegaram antes de existir stream ativo.
             if self._consume_restart(runtime):
                 runtime.set_state("reconnecting", RESTART_REASON)
@@ -633,7 +803,7 @@ class CameraManager:
                 continue
 
             wait_reason = self._wait_for_playlist(runtime, proc)
-            if self.stop_event.is_set():
+            if self.stop_event.is_set() or runtime.stop_requested.is_set():
                 runtime.note_disconnected()
                 proc.stop()
                 runtime.clear_proc()
@@ -657,7 +827,7 @@ class CameraManager:
             reason = None
             last_reach_check = time.time()
 
-            while not self.stop_event.is_set():
+            while not (self.stop_event.is_set() or runtime.stop_requested.is_set()):
                 if self._consume_restart(runtime):
                     reason = RESTART_REASON
                     break
@@ -704,7 +874,7 @@ class CameraManager:
                     reason = RESTART_REASON
                     break
 
-            if self.stop_event.is_set():
+            if self.stop_event.is_set() or runtime.stop_requested.is_set():
                 runtime.note_disconnected()
                 proc.stop()
                 runtime.clear_proc()
@@ -723,7 +893,8 @@ class CameraManager:
     def _wait_for_playlist(self, runtime: CameraRuntime, proc: FFmpegProcess) -> str | None:
         """None = playlist pronta; string = motivo pelo qual não ficou pronta."""
         deadline = time.time() + self.hls_cfg.start_grace_seconds
-        while time.time() < deadline and not self.stop_event.is_set():
+        while (time.time() < deadline and not self.stop_event.is_set()
+               and not runtime.stop_requested.is_set()):
             if self._consume_restart(runtime):
                 return RESTART_REASON
             rc = proc.poll()

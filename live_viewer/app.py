@@ -15,7 +15,7 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import quote, unquote, urlsplit
+from urllib.parse import parse_qs, quote, unquote, urlsplit
 
 from camera_manager import (
     CameraManager,
@@ -28,8 +28,10 @@ from camera_store import (
     add_camera as store_add_camera,
     remove_camera as store_remove_camera,
     rename_camera as store_rename_camera,
+    update_camera as store_update_camera,
 )
 from logging_utils import setup_logging
+from vision.detection_manager import DetectionManager
 
 BASE_DIR = Path(__file__).resolve().parent
 LOGGER = logging.getLogger("viewer")
@@ -106,24 +108,50 @@ class ViewerServer(ThreadingHTTPServer):
 
     def __init__(self, address, handler, manager: CameraManager,
                  camera_specs: list[CameraSpec], base_path: str = "",
-                 config_path: Path | None = None, secrets_path: Path | None = None):
+                 config_path: Path | None = None, secrets_path: Path | None = None,
+                 detection: DetectionManager | None = None,
+                 secrets: dict[str, str] | None = None):
         super().__init__(address, handler)
         self.manager = manager
+        self.detection = detection
         self.camera_specs = camera_specs
         self.camera_ids = {spec.id for spec in camera_specs}
         self.base_path = (base_path or "").rstrip("/")
         self.config_path = config_path
         self.secrets_path = secrets_path
+        self.secrets = dict(secrets or {})
 
-    def register_camera(self, spec: CameraSpec) -> None:
+    def register_camera(self, spec: CameraSpec, password: str | None = None) -> None:
         self.camera_ids.add(spec.id)
         self.camera_specs.append(spec)
+        if password is not None:
+            self.secrets[spec.secret] = password
+        if self.detection is not None:
+            self.detection.add_camera(spec)
+
+    def update_camera_state(self, spec: CameraSpec, password: str) -> None:
+        """Atualiza a lista servida pela UI e a senha em memória."""
+        for index, item in enumerate(self.camera_specs):
+            if item.id == spec.id:
+                self.camera_specs[index] = spec
+                break
+        self.secrets[spec.secret] = password
+        if self.detection is not None:
+            self.detection.add_camera(spec)
 
     def rename_camera(self, camera_id: str, spec: CameraSpec) -> None:
         for index, item in enumerate(self.camera_specs):
             if item.id == camera_id:
                 self.camera_specs[index] = spec
-                return
+                break
+        if self.detection is not None:
+            self.detection.rename_camera(camera_id, spec)
+
+    def unregister_camera(self, camera_id: str) -> None:
+        self.camera_ids.discard(camera_id)
+        self.camera_specs[:] = [spec for spec in self.camera_specs if spec.id != camera_id]
+        if self.detection is not None:
+            self.detection.remove_camera(camera_id)
 
 
 class ViewerHandler(BaseHTTPRequestHandler):
@@ -204,6 +232,9 @@ class ViewerHandler(BaseHTTPRequestHandler):
         path = self._strip_base_path(raw_path)
         if path is None:
             return self._not_found()
+        parts = [p for p in path.split("/") if p]
+        if len(parts) == 3 and parts[:2] == ["api", "cameras"]:
+            return self._get_camera(parts[2])
         try:
             if path in ("/", "/index.html"):
                 return self._serve_index()
@@ -227,6 +258,32 @@ class ViewerHandler(BaseHTTPRequestHandler):
                     "cameras": len(self.server.camera_specs),
                     "states": {s["id"]: s["state"] for s in self.server.manager.snapshot()},
                 })
+            if path == "/api/detections":
+                return self._json(200, self.server.detection.status() if self.server.detection else {"enabled": False, "cameras": []})
+            if path.startswith("/api/detections/"):
+                cam_id = path[len("/api/detections/"):].strip("/")
+                state = self.server.detection.camera_state(cam_id) if self.server.detection else None
+                if state is None:
+                    return self._json(404, {"ok": False, "error": "câmera não encontrada"})
+                return self._json(200, state)
+            if path == "/api/events":
+                query = parse_qs(parsed.query)
+                camera_id = (query.get("camera") or [None])[0]
+                try:
+                    limit = int((query.get("limit") or ["50"])[0])
+                except (TypeError, ValueError):
+                    limit = 50
+                events = self.server.detection.events(camera_id, limit) if self.server.detection else []
+                prefix = self._render_prefix()
+                for event in events:
+                    snapshot = event.get("snapshot")
+                    if snapshot:
+                        event["snapshot_url"] = (
+                            f"{prefix}/events/{quote(str(event['camera_id']))}/{quote(str(snapshot))}"
+                        )
+                return self._json(200, {"events": events})
+            if path.startswith("/events/"):
+                return self._serve_event_snapshot(path)
             if path.startswith("/streams/"):
                 return self._serve_stream(path)
             if path.startswith("/static/"):
@@ -252,6 +309,10 @@ class ViewerHandler(BaseHTTPRequestHandler):
             return self._json(202, {"ok": True, "camera": cam_id})
         if len(parts) == 4 and parts[:2] == ["api", "cameras"] and parts[3] == "rename":
             return self._rename_camera(parts[2])
+        if len(parts) == 4 and parts[:2] == ["api", "cameras"] and parts[3] == "update":
+            return self._update_camera(parts[2])
+        if len(parts) == 4 and parts[:2] == ["api", "cameras"] and parts[3] == "remove":
+            return self._remove_camera(parts[2])
         return self._json(404, {"ok": False, "error": "rota não encontrada"})
 
     def _request_hosts(self) -> set[str]:
@@ -303,6 +364,34 @@ class ViewerHandler(BaseHTTPRequestHandler):
             return None
         return payload
 
+    def _get_camera(self, camera_id: str) -> None:
+        """Devolve a configuração completa da câmera para o dialog de edição."""
+        spec = next(
+            (item for item in self.server.camera_specs if item.id == camera_id), None
+        )
+        if spec is None:
+            return self._json(404, {"ok": False, "error": "Câmera não encontrada."})
+        data = {
+            "id": spec.id,
+            "name": spec.name,
+            "host": spec.host,
+            "port": spec.port,
+            "username": spec.username,
+            "secret": spec.secret,
+            "password": self.server.secrets.get(spec.secret, ""),
+            "path": spec.path,
+            "transport": spec.transport,
+            "enabled": bool(spec.enabled),
+            "output_width": spec.output_width,
+            "output_height": spec.output_height,
+            "video_bitrate": spec.video_bitrate,
+            "audio_bitrate": spec.audio_bitrate,
+            "input_fps": spec.input_fps,
+            "detection_enabled": spec.detection_enabled,
+            "source_url": spec.source_url,
+        }
+        self._json(200, {"ok": True, "camera": data}, {"Cache-Control": "no-store"})
+
     def _add_camera(self) -> None:
         payload = self._read_json_body()
         if payload is None:
@@ -323,7 +412,7 @@ class ViewerHandler(BaseHTTPRequestHandler):
         except ConfigError as exc:
             if spec is not None:
                 try:
-                    store_remove_camera(config_path, secrets_path, spec.id, spec.secret)
+                    store_remove_camera(config_path, secrets_path, spec.id)
                 except ConfigError:
                     LOGGER.exception("não foi possível desfazer o cadastro da câmera")
             self._json(400, {"ok": False, "error": str(exc)})
@@ -332,13 +421,13 @@ class ViewerHandler(BaseHTTPRequestHandler):
             LOGGER.exception("falha inesperada ao adicionar câmera")
             if spec is not None:
                 try:
-                    store_remove_camera(config_path, secrets_path, spec.id, spec.secret)
+                    store_remove_camera(config_path, secrets_path, spec.id)
                 except ConfigError:
                     LOGGER.exception("não foi possível desfazer o cadastro da câmera")
             self._json(500, {"ok": False, "error": "Não foi possível adicionar a câmera. Veja o log."})
             return
 
-        self.server.register_camera(spec)
+        self.server.register_camera(spec, password)
         LOGGER.info("câmera %s (%s) cadastrada pela interface", spec.id, spec.name)
         self._json(201, {
             "ok": True,
@@ -395,6 +484,103 @@ class ViewerHandler(BaseHTTPRequestHandler):
         LOGGER.info("câmera %s renomeada para %s", camera_id, new_spec.name)
         self._json(200, {"ok": True, "camera": {"id": camera_id, "name": new_spec.name}})
 
+    def _update_camera(self, camera_id: str) -> None:
+        payload = self._read_json_body()
+        if payload is None:
+            return
+
+        config_path = getattr(self.server, "config_path", None)
+        secrets_path = getattr(self.server, "secrets_path", None)
+        old_spec = next(
+            (spec for spec in self.server.camera_specs if spec.id == camera_id), None
+        )
+        if config_path is None or secrets_path is None or old_spec is None:
+            return self._json(404, {"ok": False, "error": "Câmera não encontrada."})
+
+        def payload_from(spec: CameraSpec, password: str) -> dict:
+            return {
+                "name": spec.name,
+                "host": spec.host,
+                "port": spec.port,
+                "username": spec.username,
+                "password": password,
+                "path": spec.path,
+                "transport": spec.transport,
+                "enabled": spec.enabled,
+                "output_width": spec.output_width,
+                "output_height": spec.output_height,
+                "video_bitrate": spec.video_bitrate,
+                "audio_bitrate": spec.audio_bitrate,
+                "input_fps": spec.input_fps,
+                "detection_enabled": spec.detection_enabled,
+                "source_url": spec.source_url,
+            }
+
+        old_payload = payload_from(old_spec, self.server.secrets.get(old_spec.secret, ""))
+        written = False
+        spec: CameraSpec | None = None
+        try:
+            spec, password = store_update_camera(
+                config_path, secrets_path, camera_id, payload
+            )
+            written = True
+            if not self.server.manager.update_camera(camera_id, spec, password):
+                raise ConfigError("Câmera não encontrada no supervisor.")
+        except ConfigError as exc:
+            if written:
+                try:
+                    store_update_camera(config_path, secrets_path, camera_id, old_payload)
+                except ConfigError:
+                    LOGGER.exception("não foi possível desfazer a atualização da câmera")
+            return self._json(400, {"ok": False, "error": str(exc)})
+        except Exception:  # noqa: BLE001
+            LOGGER.exception("falha inesperada ao atualizar câmera")
+            if written:
+                try:
+                    store_update_camera(config_path, secrets_path, camera_id, old_payload)
+                except ConfigError:
+                    LOGGER.exception("não foi possível desfazer a atualização da câmera")
+            return self._json(
+                500, {"ok": False, "error": "Não foi possível salvar a câmera. Veja o log."}
+            )
+
+        self.server.update_camera_state(spec, password)
+        LOGGER.info("câmera %s atualizada pela interface; stream reiniciado", camera_id)
+        self._json(200, {
+            "ok": True,
+            "camera": {"id": camera_id, "name": spec.name},
+            "restarted": True,
+        })
+
+    def _remove_camera(self, camera_id: str) -> None:
+        config_path = getattr(self.server, "config_path", None)
+        secrets_path = getattr(self.server, "secrets_path", None)
+        if config_path is None or secrets_path is None:
+            return self._json(500, {"ok": False, "error": "Configuração do servidor indisponível."})
+        if camera_id not in self.server.camera_ids:
+            return self._json(404, {"ok": False, "error": "Câmera não encontrada."})
+
+        try:
+            store_remove_camera(config_path, secrets_path, camera_id)
+        except ConfigError as exc:
+            return self._json(400, {"ok": False, "error": str(exc)})
+        except Exception:  # noqa: BLE001
+            LOGGER.exception("falha inesperada ao remover câmera")
+            return self._json(500, {"ok": False, "error": "Não foi possível remover a câmera. Veja o log."})
+
+        # A configuração já é a fonte da verdade. Falhas de limpeza não devem
+        # impedir a remoção, mas são registradas para diagnóstico.
+        try:
+            self.server.manager.remove_camera(camera_id)
+        except Exception:  # noqa: BLE001
+            LOGGER.exception("falha ao encerrar o stream da câmera %s", camera_id)
+        try:
+            self.server.unregister_camera(camera_id)
+        except Exception:  # noqa: BLE001
+            LOGGER.exception("falha ao remover a câmera %s dos estados em memória", camera_id)
+        LOGGER.info("câmera %s removida pela interface", camera_id)
+        self._json(200, {"ok": True, "camera": camera_id})
+
     # -------------------------------------------------------------- handlers
     def _serve_index(self) -> None:
         template = (BASE_DIR / "templates" / "index.html").read_text(encoding="utf-8")
@@ -418,6 +604,19 @@ class ViewerHandler(BaseHTTPRequestHandler):
             return self._not_found()
         self._send(200, data, content_type,
                    {"Cache-Control": "public, max-age=3600"})
+
+    def _serve_event_snapshot(self, path: str) -> None:
+        parts = [p for p in path.split("/") if p]
+        if len(parts) != 3 or parts[0] != "events" or self.server.detection is None:
+            return self._not_found()
+        target = self.server.detection.snapshot_path(parts[1], parts[2])
+        if target is None:
+            return self._not_found()
+        try:
+            data = target.read_bytes()
+        except OSError:
+            return self._not_found()
+        self._send(200, data, "image/jpeg", {"Cache-Control": "no-store"})
 
     def _serve_stream(self, path: str) -> None:
         parts = [p for p in path.split("/") if p]
@@ -531,7 +730,7 @@ def main(argv: list[str] | None = None) -> int:
     bootstrap = logging.getLogger("bootstrap")
     try:
         secrets = load_secrets(secrets_path, bootstrap)
-        server_cfg, hls_cfg, cameras = load_config(config_path)
+        server_cfg, hls_cfg, detection_cfg, cameras = load_config(config_path)
     except ConfigError as exc:
         print(f"erro de configuração: {exc}", file=sys.stderr)
         return 2
@@ -550,6 +749,7 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         manager = CameraManager(cameras, secrets, hls_cfg, BASE_DIR, LOGGER, redact, server_cfg.base_path)
+        detection = DetectionManager(detection_cfg, cameras, BASE_DIR, LOGGER, server_cfg.base_path)
     except ConfigError as exc:
         print(f"erro de configuração: {exc}", file=sys.stderr)
         lock_handle.close()
@@ -560,7 +760,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         httpd = ViewerServer(
             (host, port), ViewerHandler, manager, cameras, server_cfg.base_path,
-            config_path=config_path, secrets_path=secrets_path,
+            config_path=config_path, secrets_path=secrets_path, detection=detection,
+            secrets=secrets,
         )
     except OSError as exc:
         print(f"não foi possível escutar em {host}:{port}: {exc}", file=sys.stderr)
@@ -568,6 +769,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     manager.start()
+    detection.start()
 
     def shutdown(signum, _frame):
         LOGGER.info("recebido sinal %s; encerrando", signum)
@@ -600,6 +802,9 @@ def main(argv: list[str] | None = None) -> int:
     for spec in cameras:
         LOGGER.info("câmera %s: %s -> %s", spec.id, spec.safe_url(),
                     f"{server_cfg.base_path}/streams/{spec.id}/stream.m3u8")
+    LOGGER.info("visão computacional: %s (%s)",
+                "ativada" if detection_cfg.enabled else "desativada",
+                Path(detection_cfg.model).name)
     if host not in {"127.0.0.1", "localhost", "::1"}:
         LOGGER.warning("servidor escutando em %s; exponha apenas em rede confiável", host)
 
@@ -608,6 +813,7 @@ def main(argv: list[str] | None = None) -> int:
     finally:
         LOGGER.info("encerrando servidor HTTP")
         httpd.server_close()
+        detection.stop()
         manager.stop()
         try:
             lock_handle.close()
